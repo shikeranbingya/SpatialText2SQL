@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export NO_PROXY=100.64.0.0/10,100.126.198.114,localhost,127.0.0.1
+export no_proxy=100.64.0.0/10,100.126.198.114,localhost,127.0.0.1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"

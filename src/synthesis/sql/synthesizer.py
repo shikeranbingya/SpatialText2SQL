@@ -50,6 +50,38 @@ class ConstraintGuidedSQLSynthesizer:
         )
         self.rng = np.random.default_rng(self.config.synthesis.random_seed)
 
+    @staticmethod
+    def _format_function_names(sampled_functions: Sequence[Any]) -> str:
+        names = [to_text(getattr(item, "function_name", "")) for item in sampled_functions]
+        names = [name for name in names if name]
+        return ", ".join(names) if names else "<none>"
+
+    def _log_sample_progress(
+        self,
+        *,
+        database: SynthesizedSpatialDatabase,
+        sample_index: int,
+        target_count: int,
+        sampled_functions: Sequence[Any],
+        row: SynthesizedSQLQuery | None,
+        status: str,
+    ) -> None:
+        spatial_functions = row.used_spatial_functions if row is not None and row.used_spatial_functions else []
+        spatial_function_text = (
+            ", ".join(spatial_functions)
+            if spatial_functions
+            else self._format_function_names(sampled_functions)
+        )
+        LOGGER.info(
+            "SQL synthesis progress %s/%s | city=%s | schema_id=%s | spatial_functions=%s | status=%s",
+            sample_index + 1,
+            target_count,
+            database.city,
+            database.database_id,
+            spatial_function_text,
+            status,
+        )
+
     def synthesize_all(
         self,
         databases: Sequence[SynthesizedSpatialDatabase],
@@ -66,8 +98,16 @@ class ConstraintGuidedSQLSynthesizer:
         if not database.spatial_fields:
             LOGGER.warning("Skipping database %s because it has no spatial fields.", database.database_id)
             return []
+        target_count = self._resolve_num_sql_per_database(database.city)
+        if target_count <= 0:
+            LOGGER.info(
+                "Skipping database %s because num_sql_per_database is 0 for city=%s.",
+                database.database_id,
+                database.city,
+            )
+            return []
         output_rows: list[SynthesizedSQLQuery] = []
-        for sample_index in range(self.config.synthesis.num_sql_per_database):
+        for sample_index in range(target_count):
             difficulty_level = self._sample_difficulty(database)
             structural_constraints = self._build_structural_constraints(difficulty_level, database)
             sampled_functions = self.function_library.sample_functions(
@@ -77,7 +117,10 @@ class ConstraintGuidedSQLSynthesizer:
             )
             if not sampled_functions:
                 LOGGER.warning(
-                    "Skipping SQL sample for database %s because no compatible PostGIS functions were found.",
+                    "SQL synthesis progress %s/%s | city=%s | schema_id=%s | spatial_functions=<none> | status=no-compatible-functions",
+                    sample_index + 1,
+                    target_count,
+                    database.city,
                     database.database_id,
                 )
                 continue
@@ -87,6 +130,14 @@ class ConstraintGuidedSQLSynthesizer:
                 difficulty_level=difficulty_level,
                 structural_constraints=structural_constraints,
                 sampled_functions=sampled_functions,
+            )
+            self._log_sample_progress(
+                database=database,
+                sample_index=sample_index,
+                target_count=target_count,
+                sampled_functions=sampled_functions,
+                row=row,
+                status="kept" if row is not None else "discarded",
             )
             if row is not None:
                 output_rows.append(row)
@@ -200,6 +251,17 @@ class ConstraintGuidedSQLSynthesizer:
         if self._should_keep_sample(validation_result, execution_result):
             return synthesized
         return None
+
+    def _resolve_num_sql_per_database(self, city: str) -> int:
+        config_value = self.config.synthesis.num_sql_per_database
+        if isinstance(config_value, Mapping):
+            city_key = to_text(city).lower()
+            if city_key in config_value:
+                return max(int(config_value[city_key]), 0)
+            if "default" in config_value:
+                return max(int(config_value["default"]), 0)
+            return 0
+        return max(int(config_value), 0)
 
     def _sample_difficulty(self, database: SynthesizedSpatialDatabase) -> str:
         fixed = to_text(self.config.synthesis.fixed_difficulty).lower()

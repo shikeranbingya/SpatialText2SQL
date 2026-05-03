@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=str(DEFAULT_SQL_SYNTHESIS_CONFIG_PATH))
     parser.add_argument("--input")
     parser.add_argument("--output")
-    parser.add_argument("--num-sql-per-database", type=int)
+    parser.add_argument("--num-sql-per-database")
     parser.add_argument("--difficulty")
     parser.add_argument("--difficulty-weights")
     parser.add_argument("--postgis-function-json-path")

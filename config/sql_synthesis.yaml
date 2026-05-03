@@ -21,7 +21,17 @@ llm:
 synthesis:
   input_path: data/processed/synthesized_spatial_databases.jsonl
   output_path: data/processed/synthesized_sql_queries.jsonl
-  num_sql_per_database: 5
+  # Example for all supported cities:
+  # num_sql_per_database:
+  #   nyc: 8
+  #   lacity: 6
+  #   chicago: 6
+  #   seattle: 5
+  #   sf: 7
+  #   boston: 5
+  #   phoenix: 5
+  num_sql_per_database:
+    nyc: 1
   difficulty_weights:
     easy: 1.0
     medium: 1.0

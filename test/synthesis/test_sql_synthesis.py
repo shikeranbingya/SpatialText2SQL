@@ -49,10 +49,11 @@ def _make_table(table_id: str, table_name: str, *, city: str = "nyc", spatial_na
 
 
 def _make_database(table_count: int = 2, *, database_id: str = "nyc_0001") -> SynthesizedSpatialDatabase:
-    tables = [_make_table(f"t{i+1}", f"table_{i+1}") for i in range(table_count)]
+    city = database_id.split("_", 1)[0]
+    tables = [_make_table(f"t{i+1}", f"table_{i+1}", city=city) for i in range(table_count)]
     return SynthesizedSpatialDatabase.from_selected_tables(
         database_id=database_id,
-        city="nyc",
+        city=city,
         selected_tables=tables,
         sampling_trace=[],
         graph_stats={},
@@ -164,7 +165,12 @@ def _make_config(**kwargs) -> SQLSynthesisConfig:
     base = SQLSynthesisConfig(
         database=SQLSynthesisDBConfig(),
         llm=SQLSynthesisLLMConfig(provider="mock", model="mock-model", base_url="http://mock", api_key_env="OPENAI_API_KEY"),
-        synthesis=SQLSynthesisRunConfig(num_sql_per_database=1, max_revision_rounds=1, keep_invalid=False, keep_failed_execution=False),
+        synthesis=SQLSynthesisRunConfig(
+            num_sql_per_database={"default": 1},
+            max_revision_rounds=1,
+            keep_invalid=False,
+            keep_failed_execution=False,
+        ),
         functions=SQLSynthesisFunctionConfig(postgis_function_json_path="", st_function_markdown_path=""),
         execution=SQLExecutionCheckConfig(enable_execution_check=True, require_non_empty_result=True),
         logging=SQLSynthesisLoggingConfig(),
@@ -205,6 +211,9 @@ class SQLSynthesisTests(unittest.TestCase):
                         "synthesis:",
                         "  input_path: data/in.jsonl",
                         "  output_path: data/out.jsonl",
+                        "  num_sql_per_database:",
+                        "    nyc: 8",
+                        "    sf: 4",
                         "  difficulty_weights:",
                         "    easy: 2",
                         "    medium: 1",
@@ -224,6 +233,7 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertEqual(loaded.database.port, 6543)
         self.assertEqual(overridden.llm.model, "override-model")
         self.assertTrue(overridden.synthesis.output_path.endswith("override.jsonl"))
+        self.assertEqual(loaded.synthesis.num_sql_per_database, {"nyc": 8, "sf": 4})
 
     def test_build_sql_generator_supports_ollama_provider(self):
         generator = build_sql_generator(
@@ -238,10 +248,11 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         self.assertIsInstance(generator, OllamaSQLGenerator)
 
-    def test_ollama_generator_parses_response_payload(self):
+    def test_ollama_generator_uses_openai_style_client(self):
         generator = OllamaSQLGenerator(
             model="qwen2.5:14b",
             base_url="http://localhost:11434",
+            api_key_env="IGNORED_FOR_OLLAMA",
             temperature=0.1,
             max_tokens=512,
             timeout=30,
@@ -249,14 +260,28 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         from unittest import mock
 
+        class FakeUsage:
+            prompt_tokens = 12
+            completion_tokens = 34
+            total_tokens = 46
+
+        class FakeMessage:
+            content = '{"sql":"SELECT 1","used_tables":[],"used_columns":[],"used_spatial_functions":[],"reasoning_summary":"ok"}'
+
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices = [FakeChoice()]
+            usage = FakeUsage()
+
+            def model_dump(self):
+                return {"id": "fake"}
+
         with mock.patch.object(
-            generator,
-            "_post_json",
-            return_value={
-                "message": {"role": "assistant", "content": '{"sql":"SELECT 1","used_tables":[],"used_columns":[],"used_spatial_functions":[],"reasoning_summary":"ok"}'},
-                "prompt_eval_count": 12,
-                "eval_count": 34,
-            },
+            generator.client.chat.completions,
+            "create",
+            return_value=FakeResponse(),
         ) as patched:
             response = generator.generate("Return SQL JSON")
         patched.assert_called_once()
@@ -431,6 +456,42 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertIn("operator does not exist", rows[0].feedback_prompts[0])
         self.assertIn("1000", rows[0].sql)
 
+    def test_synthesizer_logs_city_schema_function_and_progress(self):
+        library = _load_library([_sample_function_json_payload()[0]], "## spatialsql_pg\nST_DWithin\n")
+        database = _make_database(table_count=2)
+        config = _make_config()
+        generator = MockSQLGenerator(
+            responses=[
+                json.dumps(
+                    {
+                        "sql": "SELECT ST_DWithin(a.geom, b.geom, 10) FROM table_1 a JOIN table_2 b ON true",
+                        "used_tables": ["table_1", "table_2"],
+                        "used_columns": ["geom"],
+                        "used_spatial_functions": ["ST_DWithin"],
+                        "reasoning_summary": "ok",
+                    }
+                )
+            ]
+        )
+        from src.synthesis.sql.models import SQLExecutionResult
+
+        synthesizer = ConstraintGuidedSQLSynthesizer(
+            config=config,
+            function_library=library,
+            sql_generator=generator,
+            prompt_builder=PromptBuilder({"project_root": Path.cwd()}),
+            validator=SQLValidator(library),
+            execution_checker=FakeExecutionChecker([SQLExecutionResult(executed=True, success=True, row_count=1)]),
+        )
+        with self.assertLogs("src.synthesis.sql.synthesizer", level="INFO") as captured:
+            rows = synthesizer.synthesize_for_database(database)
+        self.assertEqual(len(rows), 1)
+        log_text = "\n".join(captured.output)
+        self.assertIn("SQL synthesis progress 1/1", log_text)
+        self.assertIn("city=nyc", log_text)
+        self.assertIn("schema_id=nyc_0001", log_text)
+        self.assertIn("spatial_functions=ST_DWithin", log_text)
+
     def test_empty_result_triggers_feedback_and_keep_controls(self):
         library = _load_library([_sample_function_json_payload()[1]], "## spatialsql_pg\nST_Buffer\n")
         database = _make_database(table_count=1)
@@ -528,6 +589,36 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         kept_failed = synth_failed_exec.synthesize_for_database(database)
         self.assertEqual(len(kept_failed), 1)
+
+    def test_num_sql_per_database_uses_city_mapping(self):
+        library = _load_library([_sample_function_json_payload()[1]], "## spatialsql_pg\nST_Buffer\n")
+        config = _make_config(synthesis={"num_sql_per_database": {"nyc": 2}})
+        generator = MockSQLGenerator(
+            responses=[
+                '{"sql":"SELECT ST_Buffer(t.geom, 10) FROM table_1 t","used_tables":["table_1"],"used_columns":["geom"],"used_spatial_functions":["ST_Buffer"],"reasoning_summary":"ok"}',
+                '{"sql":"SELECT ST_Buffer(t.geom, 20) FROM table_1 t","used_tables":["table_1"],"used_columns":["geom"],"used_spatial_functions":["ST_Buffer"],"reasoning_summary":"ok"}',
+            ]
+        )
+        from src.synthesis.sql.models import SQLExecutionResult
+
+        synthesizer = ConstraintGuidedSQLSynthesizer(
+            config=config,
+            function_library=library,
+            sql_generator=generator,
+            prompt_builder=PromptBuilder({"project_root": Path.cwd()}),
+            validator=SQLValidator(library),
+            execution_checker=FakeExecutionChecker(
+                [
+                    SQLExecutionResult(executed=True, success=True, row_count=1),
+                    SQLExecutionResult(executed=True, success=True, row_count=1),
+                ]
+            ),
+        )
+
+        nyc_rows = synthesizer.synthesize_for_database(_make_database(table_count=1, database_id="nyc_0001"))
+        sf_rows = synthesizer.synthesize_for_database(_make_database(table_count=1, database_id="sf_0001"))
+        self.assertEqual(len(nyc_rows), 2)
+        self.assertEqual(len(sf_rows), 0)
 
 
 if __name__ == "__main__":

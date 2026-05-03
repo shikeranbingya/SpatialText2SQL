@@ -236,6 +236,8 @@ Default settings:
 - Input: `data/processed/synthesized_spatial_databases.jsonl`
 - Output: `data/processed/synthesized_sql_queries.jsonl`
 - Database connection: `localhost:5432/syntheized`
+- `num_sql_per_database` supports per-city mapping, for example `nyc=8,sf=6` from CLI or a YAML mapping in `config/sql_synthesis.yaml`
+- The default config only enables `nyc: 8`; cities not listed will not emit SQL unless you add them or provide a `default` entry
 
 Edit persistent settings in `config/sql_synthesis.yaml`.
 

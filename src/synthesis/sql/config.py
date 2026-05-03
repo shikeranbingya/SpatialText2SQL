@@ -65,7 +65,7 @@ class SQLExecutionCheckConfig:
 class SQLSynthesisRunConfig:
     input_path: str = str(_project_root() / "data" / "processed" / "synthesized_spatial_databases.jsonl")
     output_path: str = str(_project_root() / "data" / "processed" / "synthesized_sql_queries.jsonl")
-    num_sql_per_database: int = 5
+    num_sql_per_database: dict[str, int] = field(default_factory=lambda: {"default": 5})
     fixed_difficulty: str = ""
     difficulty_weights: dict[str, float] = field(
         default_factory=lambda: {level: 1.0 for level in DIFFICULTY_LEVELS}
@@ -164,6 +164,55 @@ def _normalize_weights(value: Any) -> dict[str, float]:
     return weights
 
 
+def _normalize_num_sql_per_database(value: Any, default: Mapping[str, int]) -> dict[str, int]:
+    if value in (None, ""):
+        return {str(key): int(val) for key, val in default.items()}
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {str(key): int(val) for key, val in default.items()}
+        if "=" not in text:
+            parsed = int(text)
+            if parsed <= 0:
+                raise ValueError("num_sql_per_database must be positive.")
+            return {"default": parsed}
+        parsed_map: dict[str, int] = {}
+        for item in text.split(","):
+            entry = item.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                raise ValueError(
+                    "num_sql_per_database string must be a positive integer or comma-separated city=count pairs."
+                )
+            key, raw_value = entry.split("=", 1)
+            city = key.strip().lower()
+            count = int(raw_value.strip())
+            if count <= 0:
+                raise ValueError("num_sql_per_database values must be positive.")
+            parsed_map[city] = count
+        if not parsed_map:
+            raise ValueError("num_sql_per_database mapping cannot be empty.")
+        return parsed_map
+    if isinstance(value, Mapping):
+        parsed_map = {}
+        for key, raw_value in value.items():
+            city = to_text(key).lower()
+            if not city:
+                continue
+            count = int(raw_value)
+            if count <= 0:
+                raise ValueError("num_sql_per_database values must be positive.")
+            parsed_map[city] = count
+        if not parsed_map:
+            raise ValueError("num_sql_per_database mapping cannot be empty.")
+        return parsed_map
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError("num_sql_per_database must be positive.")
+    return {"default": parsed}
+
+
 def _normalize_text_list(value: Any, default: list[str]) -> list[str]:
     if value in (None, ""):
         return list(default)
@@ -247,7 +296,7 @@ def _build_sql_synthesis_config_from_payload(
         synthesis=SQLSynthesisRunConfig(
             input_path=_resolve_path(synthesis_section.get("input_path"), path, default_syn.input_path),
             output_path=_resolve_path(synthesis_section.get("output_path"), path, default_syn.output_path),
-            num_sql_per_database=_as_positive_int(
+            num_sql_per_database=_normalize_num_sql_per_database(
                 synthesis_section.get("num_sql_per_database"),
                 default_syn.num_sql_per_database,
             ),
