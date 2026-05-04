@@ -244,6 +244,40 @@ Default settings:
 
 Edit persistent settings in `config/sql_synthesis.yaml`.
 
+## Diversity-Aware Question Generation
+
+Generate semantically equivalent English questions from executable PostGIS SQL:
+
+```bash
+scripts/dataset_construction/diversity_aware_question_generation.sh
+```
+
+Common options:
+
+```bash
+# Override input and output
+scripts/dataset_construction/diversity_aware_question_generation.sh \
+  --sql-input data/processed/synthesized_sql_queries.jsonl \
+  --database-context-path data/processed/synthesized_spatial_databases.jsonl \
+  --output data/processed/diversity_aware_questions.jsonl
+
+# Force a fixed linguistic style
+scripts/dataset_construction/diversity_aware_question_generation.sh \
+  --style ranking_inquiry
+```
+
+Default settings:
+
+- Input SQL JSONL: `data/processed/synthesized_sql_queries.jsonl`
+- Input database context JSONL: `data/processed/synthesized_spatial_databases.jsonl`
+- Output: `data/processed/diversity_aware_questions.jsonl`
+- Default styles: `factual_lookup`, `comparative_analysis`, `aggregation_inquiry`, `ranking_inquiry`, `exploratory_analysis`
+- Default number of questions per SQL: `1`
+- Default random seed: `42`
+- The question-generation prompt preserves SQL semantics exactly and rewrites spatial relations into natural language without exposing raw PostGIS function names
+
+Edit persistent settings in `config/question_generation.yaml`.
+
 ## PostGIS Docs Parse
 
 Use the unified entry point below for PostGIS documentation parsing workflows:

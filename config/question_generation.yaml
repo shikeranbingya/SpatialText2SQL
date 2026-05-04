@@ -1,0 +1,28 @@
+llm:
+  provider: ollama
+  model: gemma4:31b
+  base_url: http://100.126.198.114:11434/v1
+  api_key_env: EMPTY
+  temperature: 0.2
+  max_tokens: 1000
+  timeout: 120
+  max_retries: 2
+
+generation:
+  sql_input_path: data/processed/synthesized_sql_queries.jsonl
+  database_context_path: data/processed/synthesized_spatial_databases.jsonl
+  output_path: data/processed/diversity_aware_questions.jsonl
+  num_questions_per_sql: 1
+  style_weights:
+    factual_lookup: 1.0
+    comparative_analysis: 1.0
+    aggregation_inquiry: 1.0
+    ranking_inquiry: 1.0
+    exploratory_analysis: 1.0
+  random_seed: 42
+  keep_invalid: false
+  max_revision_rounds: 1
+
+logging:
+  log_level: INFO
+  log_path: ""

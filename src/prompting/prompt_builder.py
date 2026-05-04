@@ -371,6 +371,218 @@ Target difficulty level: {difficulty_level}
                     spatial_lines.append(f"- {table_name}.{spatial_name} (crs={crs})")
         return schema_lines, spatial_lines, representative_values
 
+    def build_question_generation_prompt(
+        self,
+        *,
+        sql_query: Any,
+        database_context: Dict[str, Any],
+        sql_features: Dict[str, Any],
+        style_constraint: Dict[str, Any],
+        spatial_relation_constraints: List[Dict[str, Any]],
+    ) -> str:
+        schema_lines = self._build_question_schema_lines(database_context)
+        representative_values = self._build_question_representative_values(database_context)
+        spatial_lines = self._build_question_spatial_lines(database_context)
+        prompt = f"""
+You are generating one natural-language question from an executable PostgreSQL/PostGIS SQL query.
+
+## Task Goal
+Rewrite the SQL into exactly one English question that is semantically equivalent to the SQL.
+The question must preserve the SQL meaning exactly while sounding natural and diverse.
+
+## SQL Query
+{self._stringify_value(getattr(sql_query, "sql", ""))}
+
+## Database Context
+- database_id: {self._stringify_value(database_context.get("database_id"))}
+- city: {self._stringify_value(database_context.get("city"))}
+- selected_tables: {", ".join(database_context.get("selected_table_names", []) or [])}
+
+## Schema
+{chr(10).join(schema_lines) if schema_lines else "No schema available."}
+
+## Spatial Field Metadata
+{chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed."}
+
+## Representative Values
+{self._stable_json_text(representative_values)}
+
+## SQL Feature Summary
+{self._stable_json_text(sql_features)}
+
+## Style Constraint
+{self._stable_json_text(style_constraint)}
+
+## Spatial Relation Constraint
+{self._stable_json_text(spatial_relation_constraints)}
+
+## Semantic Preservation Rules
+- Preserve the exact SQL semantics. Do not broaden or narrow the meaning.
+- Preserve table/entity roles, containment direction, ranking direction, grouping logic, aggregate semantics, filters, and limit semantics.
+- Preserve every explicit distance threshold, count threshold, date filter, comparison operator, and top-k value.
+- Rephrase spatial functions into natural language. Do not expose raw SQL or PostGIS function names.
+- Only describe relations supported by the SQL. Do not invent entities, columns, filters, joins, or assumptions.
+- If the SQL depends on geometry or geography columns, keep the wording consistent with the actual spatial meaning and do not confuse geometry with geography.
+- Do not mention SQL, PostGIS, databases, schemas, field names, aliases, CTE names, or implementation details.
+- Generate exactly one question, not a question set.
+
+## Output Format
+Return a JSON object with exactly these fields:
+- question
+- style
+- reasoning_summary
+- spatial_phrases
+
+Example shape:
+{{
+  "question": "Natural-language question here",
+  "style": "{self._stringify_value(style_constraint.get('style'))}",
+  "reasoning_summary": "One short sentence.",
+  "spatial_phrases": ["phrase 1"]
+}}
+
+Requirements:
+- question: one English question sentence or sentence-like utterance
+- style: must equal "{self._stringify_value(style_constraint.get('style'))}"
+- reasoning_summary: one short sentence summarizing how semantics were preserved
+- spatial_phrases: list of natural-language spatial phrases used in the question
+- Do not return Markdown code fences.
+""".strip()
+        return prompt
+
+    def build_question_feedback_prompt(
+        self,
+        *,
+        sql_query: Any,
+        database_context: Dict[str, Any],
+        sql_features: Dict[str, Any],
+        style_constraint: Dict[str, Any],
+        spatial_relation_constraints: List[Dict[str, Any]],
+        original_candidate: Dict[str, Any],
+        validation_errors: List[str],
+    ) -> str:
+        schema_lines = self._build_question_schema_lines(database_context)
+        representative_values = self._build_question_representative_values(database_context)
+        spatial_lines = self._build_question_spatial_lines(database_context)
+        prompt = f"""
+You previously generated an invalid natural-language question from a PostgreSQL/PostGIS SQL query.
+Revise the question so that it is semantically equivalent to the SQL and satisfies all constraints below.
+
+## SQL Query
+{self._stringify_value(getattr(sql_query, "sql", ""))}
+
+## Original Candidate
+{self._stable_json_text(original_candidate)}
+
+## Validation Errors
+{self._stable_json_text(validation_errors)}
+
+## Database Context
+- database_id: {self._stringify_value(database_context.get("database_id"))}
+- city: {self._stringify_value(database_context.get("city"))}
+- selected_tables: {", ".join(database_context.get("selected_table_names", []) or [])}
+
+## Schema
+{chr(10).join(schema_lines) if schema_lines else "No schema available."}
+
+## Spatial Field Metadata
+{chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed."}
+
+## Representative Values
+{self._stable_json_text(representative_values)}
+
+## SQL Feature Summary
+{self._stable_json_text(sql_features)}
+
+## Style Constraint
+{self._stable_json_text(style_constraint)}
+
+## Spatial Relation Constraint
+{self._stable_json_text(spatial_relation_constraints)}
+
+## Revision Requirements
+- Keep the same task goal and the same SQL semantics.
+- Preserve containment direction, threshold values, ranking direction, aggregate meaning, grouping, and filters exactly.
+- Still avoid raw SQL and raw PostGIS function names.
+- Still produce exactly one English question.
+- Still use the requested style.
+- Fix every validation error listed above.
+
+## Output Format
+Return a JSON object with exactly these fields:
+- question
+- style
+- reasoning_summary
+- spatial_phrases
+
+Example shape:
+{{
+  "question": "Natural-language question here",
+  "style": "{self._stringify_value(style_constraint.get('style'))}",
+  "reasoning_summary": "One short sentence.",
+  "spatial_phrases": ["phrase 1"]
+}}
+
+Do not return Markdown code fences.
+""".strip()
+        return prompt
+
+    @staticmethod
+    def _build_question_schema_lines(database_context: Dict[str, Any]) -> List[str]:
+        schema_lines: List[str] = []
+        for table_item in database_context.get("schema", []) or []:
+            if not isinstance(table_item, dict):
+                continue
+            table_name = str(table_item.get("table_name") or "").strip()
+            columns = []
+            for column in table_item.get("normalized_schema", []) or []:
+                if not isinstance(column, dict):
+                    continue
+                column_name = str(column.get("canonical_name") or column.get("name") or "").strip()
+                column_type = str(column.get("canonical_type") or column.get("type") or "text").strip()
+                if column_name:
+                    columns.append(f"{column_name} {column_type}")
+            if table_name:
+                schema_lines.append(f"- {table_name}({', '.join(columns)})")
+        return schema_lines
+
+    @staticmethod
+    def _build_question_representative_values(database_context: Dict[str, Any]) -> Dict[str, Any]:
+        values = database_context.get("representative_values")
+        if isinstance(values, dict):
+            return values
+        return {}
+
+    @staticmethod
+    def _build_question_spatial_lines(database_context: Dict[str, Any]) -> List[str]:
+        spatial_lines: List[str] = []
+        for field in database_context.get("spatial_fields", []) or []:
+            if not isinstance(field, dict):
+                continue
+            table_name = str(field.get("table_name") or "").strip()
+            column_name = str(
+                field.get("column_name")
+                or field.get("canonical_name")
+                or field.get("field_name")
+                or ""
+            ).strip()
+            column_type = str(field.get("column_type") or field.get("family") or "spatial").strip()
+            spatial_type = str(field.get("spatial_type") or "").strip()
+            geometry_type = str(field.get("geometry_type") or "").strip()
+            srid = field.get("srid")
+            if table_name and column_name:
+                details = []
+                if column_type:
+                    details.append(f"type={column_type}")
+                if spatial_type:
+                    details.append(f"family={spatial_type}")
+                if geometry_type:
+                    details.append(f"geometry_type={geometry_type}")
+                if srid not in (None, ""):
+                    details.append(f"srid={srid}")
+                spatial_lines.append(f"- {table_name}.{column_name} ({', '.join(details)})")
+        return spatial_lines
+
     @staticmethod
     def _stringify_value(value: Any) -> str:
         return str(value).strip() if value not in (None, "") else ""
