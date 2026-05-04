@@ -1,6 +1,6 @@
-# 数据库连接配置 - 支持多数据库
+# Database connection configuration with multi-database support
 databases:
-  # spatial_qa 数据集使用的数据库（原有数据集）
+  # Database used by the spatial_qa dataset (existing dataset)
   postgres:
     host: "10.132.80.204"
     port: 5432
@@ -8,17 +8,17 @@ databases:
     user: "postgres"
     password: "123456"
     
-    # 连接池配置
+    # Connection pool configuration
     pool:
       min_connections: 1
       max_connections: 10
       
-    # 超时配置（秒）
+    # Timeout configuration in seconds
     timeout:
       query_timeout: 60
       connection_timeout: 10
   
-  # spatialsql_pg 数据集使用的独立数据库
+  # Dedicated database used by the spatialsql_pg dataset
   spatial_sql:
     host: "10.132.80.204"
     port: 5432
@@ -26,12 +26,12 @@ databases:
     user: "postgres"
     password: "123456"
     
-    # 连接池配置
+    # Connection pool configuration
     pool:
       min_connections: 1
       max_connections: 10
       
-    # 超时配置（秒）
+    # Timeout configuration in seconds
     timeout:
       query_timeout: 60
       connection_timeout: 10
@@ -51,7 +51,7 @@ databases:
       query_timeout: 60
       connection_timeout: 10
 
-# 向后兼容：默认数据库配置（指向 postgres）
+# Backward-compatible default database configuration (points to postgres)
 database:
   host: "10.132.80.204"
   port: 5432
@@ -59,12 +59,12 @@ database:
   user: "postgres"
   password: "123456"
   
-  # 连接池配置
+  # Connection pool configuration
   pool:
     min_connections: 1
     max_connections: 10
     
-  # 超时配置（秒）
+  # Timeout configuration in seconds
   timeout:
     query_timeout: 60
     connection_timeout: 10

@@ -1,27 +1,27 @@
-# 数据集配置文件
+# Dataset configuration file
 datasets:
   spatial_qa:
     type: "excel"
     loader_class: "SpatialQALoader"
     data_path: "Spatial QA"
-    database: "postgres"  # 使用 postgres 数据库
+    database: "postgres"  # Use the postgres database
     levels: [1, 2, 3]
     columns:
       question: "Question"
-      sql: "Reviewed Query"  # 使用审核后的标准SQL
+      sql: "Reviewed Query"  # Use the reviewed canonical SQL
     grouping:
       fields: ["level"]
       values:
         level: [1, 2, 3]
 
-  # SpatialSQL 数据集（扩展：sdbdatasets 目录下 QA-*.txt，迁移到 PostgreSQL/PostGIS 后评估）
+  # SpatialSQL dataset (extended: QA-*.txt under sdbdatasets, evaluated after migration to PostgreSQL/PostGIS)
   spatialsql_pg:
     type: "qa_txt"
     loader_class: "SpatialSQLLoader"
     data_path: "sdbdatasets"
-    database: "spatial_sql"  # 使用独立的 spatial_sql 数据库
+    database: "spatial_sql"  # Use the dedicated spatial_sql database
     use_chinese_question: false
-    use_sql_dialect_adapter: true  # SpatiaLite -> PostGIS 转换后落盘
+    use_sql_dialect_adapter: true  # Persist queries after SpatiaLite -> PostGIS conversion
     dataset_versions: ["dataset1", "dataset2"]
     domains: ["ada", "edu", "tourism", "traffic"]
     grouping:
@@ -49,11 +49,11 @@ datasets:
       values:
         level: ["L0", "L1", "L2", "L3", "L4", "L5"]
 
-# 默认数据集（保持原样，原流程不变）
+# Default dataset (kept unchanged for the original workflow)
 default_dataset: "spatial_qa"
 
-# 数据预处理配置
+# Data preprocessing configuration
 preprocessing:
-  extract_schema: true  # 是否提取Schema
-  schema_cache_dir: "data/schemas"  # Schema缓存目录
-  output_dir: "data/preprocessed"  # 预处理输出目录
+  extract_schema: true  # Whether to extract schema information
+  schema_cache_dir: "data/schemas"  # Schema cache directory
+  output_dir: "data/preprocessed"  # Preprocessing output directory

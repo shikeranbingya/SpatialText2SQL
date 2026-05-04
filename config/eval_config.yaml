@@ -1,10 +1,10 @@
-# 评估配置文件
+# Evaluation configuration file
 
-# 评估指标
+# Evaluation metrics
 metrics:
-  - "execution_accuracy"  # EX指标：执行准确率
+  - "execution_accuracy"  # EX metric: execution accuracy
 
-# 消融实验配置
+# Ablation experiment configurations
 ablation_configs:
   base:
     name: "Base"
@@ -37,7 +37,7 @@ ablation_configs:
     use_keyword: false
     prompt_style: "prompt_enhanced"
 
-# 默认使用的配置列表
+# Default configuration list
 default_configs:
   - "base"
 
@@ -53,18 +53,18 @@ prompt_styles:
     use_dataset_context: false
     dataset_specific: true
 
-# RAG配置
+# RAG configuration
 rag:
-  top_k: 5  # 返回top 5个最相关的文档
+  top_k: 5  # Return the top 5 most relevant documents
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
   vector_db_path: "data/indexes/vector/chroma"
   doc_source: "data/postgis_extracted.json"
-  chunk_strategy: "function_id"  # 按function_id切分
+  chunk_strategy: "function_id"  # Split by function_id
 
-# Keyword Search配置
+# Keyword search configuration
 keyword_search:
-  top_k: 3  # 返回top 3个最相关的结果
-  method: "tfidf"  # 使用TF-IDF方法
+  top_k: 3  # Return the top 3 most relevant results
+  method: "tfidf"  # Use the TF-IDF method
   doc_source: "data/postgis_extracted.json"
 
 floodsql_pg:
@@ -81,17 +81,17 @@ floodsql_pg:
       L5: 5
     column_top_k: 5
 
-# 评估运行配置
+# Evaluation runtime configuration
 evaluation:
-  timeout: 60  # SQL执行超时时间（秒）
-  parallel_workers: 4  # 并行评估的worker数量
-  save_details: true  # 是否保存详细结果
+  timeout: 60  # SQL execution timeout in seconds
+  parallel_workers: 4  # Number of parallel evaluation workers
+  save_details: true  # Whether to save detailed results
 
 prediction_postprocess:
   enable_spatialsql_normalization: true
   enable_floodsql_normalization: true
 
-# 结果输出配置
+# Result output configuration
 results:
   output_dir: "results"
   tasks_dir: "results/tasks"

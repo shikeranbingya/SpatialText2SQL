@@ -278,6 +278,31 @@ Default settings:
 
 Edit persistent settings in `config/question_generation.yaml`.
 
+## Quality Control
+
+Filter synthetic NL-SQL samples into an executable, deduplicated, and training-ready dataset:
+
+```bash
+scripts/dataset_construction/quality_control.sh
+```
+
+The quality-control stage validates read-only SQL safety, schema references, live PostGIS execution, lightweight NL-SQL semantic consistency, duplicate removal, and optional diversity balancing.
+
+Typical usage:
+
+```bash
+scripts/dataset_construction/quality_control.sh \
+  --input data/processed/diversity_aware_questions.jsonl \
+  --output data/processed/quality_controlled_nl_sql.jsonl
+```
+
+Default outputs:
+
+- Filtered samples: `data/processed/quality_controlled_nl_sql.jsonl`
+- Report: `data/processed/quality_control_report.json`
+
+Edit persistent settings in `config/quality_control.yaml`.
+
 ## PostGIS Docs Parse
 
 Use the unified entry point below for PostGIS documentation parsing workflows:

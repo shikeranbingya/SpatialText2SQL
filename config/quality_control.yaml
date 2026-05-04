@@ -1,0 +1,53 @@
+database:
+  host: localhost
+  port: 5432
+  database: syntheized
+  user: postgres
+  password: "123456"
+  search_path: "{schema}, public"
+  connect_timeout: 10
+  statement_timeout: 60000
+
+functions:
+  postgis_function_json_path: data/postgis_extracted.json
+  st_function_markdown_path: ST_Function.md
+  exclude_categories:
+    - raster
+    - topology
+
+run:
+  input_path: data/processed/diversity_aware_questions.jsonl
+  schema_context_path: data/processed/synthesized_spatial_databases.jsonl
+  output_path: data/processed/quality_controlled_nl_sql.jsonl
+  report_path: data/processed/quality_control_report.json
+  allow_empty_result: false
+  max_result_rows: 5
+  prefer_live_schema: true
+
+semantic:
+  mode: strict
+  debug_mode: false
+
+duplicates:
+  remove_exact_sql_duplicates: true
+  remove_normalized_sql_duplicates: true
+  remove_near_duplicate_questions: true
+  question_similarity_threshold: 0.92
+  same_sql_similarity_threshold: 0.85
+  treat_same_sql_similar_questions_as_duplicates: true
+
+balancing:
+  enabled: false
+  difficulty:
+    max_per_bucket: 0
+    target_distribution: {}
+  spatial_function:
+    max_per_bucket: 0
+    target_distribution: {}
+  linguistic_style:
+    max_per_bucket: 0
+    target_distribution: {}
+
+logging:
+  log_level: INFO
+  log_path: ""

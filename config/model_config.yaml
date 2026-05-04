@@ -1,8 +1,8 @@
-# 模型配置文件
+# Model configuration file
 #
-# 说明：
-# 1. paper_group=open_source 的模型会进入论文截图对应的 open-source 表格导出。
-# 2. 对于仓库内尚未固定下来的服务地址，api_base/model 使用显式占位值，请在实际跑实验前替换。
+# Notes:
+# 1. Models with paper_group=open_source will be exported into the open-source table used for paper figures.
+# 2. For service endpoints that are not fixed inside the repository yet, api_base/model use explicit placeholder values and should be replaced before running real experiments.
 
 default_backend: "vllm"
 
@@ -242,11 +242,11 @@ models:
         api_key: ""
         timeout: 900
 
-# 默认使用的模型列表
+# Default model list
 default_models:
   - "qwen3-8b"
 
-# 模型推理配置
+# Model inference configuration
 inference:
   batch_size: 1
   show_progress: true
