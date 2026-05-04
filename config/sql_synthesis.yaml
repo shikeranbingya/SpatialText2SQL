@@ -31,7 +31,7 @@ synthesis:
   #   boston: 5
   #   phoenix: 5
   num_sql_per_database:
-    nyc: 1
+    nyc: 4
   difficulty_weights:
     easy: 1.0
     medium: 1.0

@@ -100,31 +100,12 @@ class PromptBuilder:
         difficulty_level: str,
         structural_constraints: Dict[str, Any],
         sampled_functions: List[Dict[str, Any]],
+        database_runtime_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        schema_lines: List[str] = []
-        representative_values: Dict[str, Any] = {}
-        spatial_lines: List[str] = []
-        for table in getattr(database, "selected_tables", []):
-            table_name = str(getattr(table, "table_name", "")).strip()
-            columns = []
-            for column in getattr(table, "normalized_schema", []):
-                if not isinstance(column, dict):
-                    continue
-                column_name = str(column.get("canonical_name") or column.get("name") or "").strip()
-                column_type = str(column.get("canonical_type") or column.get("type") or "text").strip()
-                if column_name:
-                    columns.append(f"{column_name} {column_type}")
-            schema_lines.append(f"- {table_name}({', '.join(columns)})")
-            table_rep_values = getattr(table, "representative_values", None) or {}
-            if table_rep_values:
-                representative_values[table_name] = table_rep_values
-            for field in getattr(table, "spatial_fields", []):
-                if not isinstance(field, dict):
-                    continue
-                spatial_name = str(field.get("canonical_name") or "").strip()
-                crs = str(field.get("crs") or "null").strip()
-                if spatial_name:
-                    spatial_lines.append(f"- {table_name}.{spatial_name} (crs={crs})")
+        schema_lines, spatial_lines, representative_values = self._build_sql_prompt_context(
+            database,
+            database_runtime_metadata=database_runtime_metadata,
+        )
 
         functions_payload = []
         for item in sampled_functions:
@@ -172,10 +153,13 @@ Use at least one sampled PostGIS function. Prefer using all compatible sampled f
 - The SQL must satisfy the target difficulty level: {difficulty_level}.
 - Use table aliases for multi-table queries.
 - Use PostgreSQL/PostGIS syntax only.
+- Respect the exact PostGIS column types from the live database metadata. Geometry and geography are different types; do not assume they are interchangeable without an explicit cast.
 - Do not use raster or topology related functions.
 - Do not generate DDL, DML, transaction control, or administrative SQL.
 - Generate one SQL query only.
-- When the result may be large, include a LIMIT clause unless aggregation naturally keeps the result compact.
+ - The query must return no more than 5 rows.
+   - If the query's semantics already guarantee a single-row result (for example: an aggregate such as COUNT/MAX, a query that selects by primary key or otherwise clearly filters to one row), do NOT add a LIMIT clause.
+   - Otherwise, to ensure the result set is bounded, include a trailing "LIMIT 5" clause on the generated SQL.
 - The SQL should be semantically plausible for the available tables and spatial columns.
 
 ## Output Format
@@ -189,6 +173,68 @@ The JSON object must contain:
 """
         return self._cleanup_rendered_prompt(prompt)
 
+    @staticmethod
+    def _detect_geometry_columns(table: Any) -> set[str]:
+        names: set[str] = set()
+        for column in getattr(table, "normalized_schema", []):
+            if not isinstance(column, dict):
+                continue
+            canonical_type = str(column.get("canonical_type") or column.get("type") or "").strip().lower()
+            if canonical_type != "spatial":
+                continue
+            for key in ("canonical_name", "name"):
+                value = str(column.get(key) or "").strip().lower()
+                if value:
+                    names.add(value)
+        for field in getattr(table, "spatial_fields", []):
+            if not isinstance(field, dict):
+                continue
+            value = str(field.get("canonical_name") or "").strip().lower()
+            if value:
+                names.add(value)
+        return names
+
+    def _prepare_representative_values(
+        self,
+        representative_values: Dict[str, Any],
+        *,
+        geometry_columns: set[str],
+        limit: int,
+    ) -> Dict[str, Any]:
+        prepared: Dict[str, Any] = {}
+        for key, raw_value in representative_values.items():
+            column_name = str(key).strip()
+            if not column_name:
+                continue
+            is_geometry_column = column_name.lower() in geometry_columns
+            if isinstance(raw_value, (list, tuple)):
+                samples = list(raw_value)[:limit]
+                if is_geometry_column:
+                    samples = [self._geometry_preview(item) for item in samples]
+                prepared[column_name] = samples
+                continue
+            if is_geometry_column:
+                prepared[column_name] = self._geometry_preview(raw_value)
+            else:
+                prepared[column_name] = raw_value
+        return prepared
+
+    @staticmethod
+    def _geometry_preview(value: Any) -> str:
+        if isinstance(value, dict):
+            geometry_type = str(value.get("type") or "").strip()
+            return geometry_type.upper() if geometry_type else "GEOMETRY"
+        text = str(value or "").strip()
+        if not text:
+            return "GEOMETRY"
+        upper = text.upper()
+        if upper.startswith("SRID=") and ";" in text:
+            text = text.split(";", 1)[1].strip()
+        match = re.match(r"^([A-Za-z]+)", text)
+        if match:
+            return match.group(1).upper()
+        return "GEOMETRY"
+
     def build_sql_feedback_prompt(
         self,
         *,
@@ -200,19 +246,12 @@ The JSON object must contain:
         validation_errors: List[str],
         execution_error: str = "",
         empty_result: bool = False,
+        database_runtime_metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        schema_lines: List[str] = []
-        for table in getattr(database, "selected_tables", []):
-            table_name = str(getattr(table, "table_name", "")).strip()
-            columns = []
-            for column in getattr(table, "normalized_schema", []):
-                if not isinstance(column, dict):
-                    continue
-                column_name = str(column.get("canonical_name") or column.get("name") or "").strip()
-                column_type = str(column.get("canonical_type") or column.get("type") or "text").strip()
-                if column_name:
-                    columns.append(f"{column_name} {column_type}")
-            schema_lines.append(f"- {table_name}({', '.join(columns)})")
+        schema_lines, spatial_lines, representative_values = self._build_sql_prompt_context(
+            database,
+            database_runtime_metadata=database_runtime_metadata,
+        )
 
         prompt = f"""
 You must revise an existing PostgreSQL/PostGIS SQL query while preserving the original task goal.
@@ -226,6 +265,12 @@ You must revise an existing PostgreSQL/PostGIS SQL query while preserving the or
 
 ## Schema
 {chr(10).join(schema_lines)}
+
+## Spatial Field Metadata
+{chr(10).join(spatial_lines) if spatial_lines else 'No spatial fields listed.'}
+
+## Representative Values
+{self._stable_json_text(representative_values)}
 
 ## Difficulty Constraint
 Target difficulty level: {difficulty_level}
@@ -246,12 +291,85 @@ Target difficulty level: {difficulty_level}
 - Keep the same task goal and target difficulty level.
 - Still use only the provided schema tables and columns.
 - Still try to use the originally sampled PostGIS functions whenever compatible.
-- Avoid nonexistent columns, nonexistent tables, bad argument counts, type mismatches, and SRID mismatches.
+- Avoid nonexistent columns, nonexistent tables, bad argument counts, type mismatches, SRID mismatches, and geometry/geography signature mismatches.
 - If the query returned no rows, relax overly narrow filters, replace brittle literal values, or adjust spatial thresholds.
 - Return one JSON object only, with fields: sql, used_tables, used_columns, used_spatial_functions, reasoning_summary.
 - Do not return Markdown code fences.
 """
         return self._cleanup_rendered_prompt(prompt)
+
+    def _build_sql_prompt_context(
+        self,
+        database: Any,
+        *,
+        database_runtime_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[List[str], List[str], Dict[str, Any]]:
+        if isinstance(database_runtime_metadata, dict) and database_runtime_metadata.get("tables"):
+            schema_lines: List[str] = []
+            representative_values: Dict[str, Any] = {}
+            spatial_lines: List[str] = []
+            for table_meta in database_runtime_metadata.get("tables", []):
+                if not isinstance(table_meta, dict):
+                    continue
+                table_name = str(table_meta.get("table_name") or "").strip()
+                columns = []
+                for column in table_meta.get("columns", []):
+                    if not isinstance(column, dict):
+                        continue
+                    column_name = str(column.get("column_name") or "").strip()
+                    column_type = str(column.get("column_type") or column.get("data_type") or "text").strip()
+                    if column_name:
+                        columns.append(f"{column_name} {column_type}")
+                if table_name:
+                    schema_lines.append(f"- {table_name}({', '.join(columns)})")
+                table_rep_values = table_meta.get("representative_values") or {}
+                if table_name and table_rep_values:
+                    representative_values[table_name] = table_rep_values
+                for field in table_meta.get("spatial_fields", []):
+                    if not isinstance(field, dict):
+                        continue
+                    spatial_name = str(field.get("column_name") or field.get("canonical_name") or "").strip()
+                    column_type = str(field.get("column_type") or "").strip()
+                    spatial_type = str(field.get("spatial_type") or "").strip() or "spatial"
+                    geometry_type = str(field.get("geometry_type") or "").strip() or "GEOMETRY"
+                    srid = field.get("srid")
+                    if spatial_name and table_name:
+                        spatial_lines.append(
+                            f"- {table_name}.{spatial_name} "
+                            f"(type={column_type or spatial_type}, family={spatial_type}, geometry_type={geometry_type}, srid={srid if srid not in (None, '') else 'unknown'})"
+                        )
+            return schema_lines, spatial_lines, representative_values
+
+        schema_lines = []
+        representative_values: Dict[str, Any] = {}
+        spatial_lines: List[str] = []
+        for table in getattr(database, "selected_tables", []):
+            table_name = str(getattr(table, "table_name", "")).strip()
+            geometry_columns = self._detect_geometry_columns(table)
+            columns = []
+            for column in getattr(table, "normalized_schema", []):
+                if not isinstance(column, dict):
+                    continue
+                column_name = str(column.get("canonical_name") or column.get("name") or "").strip()
+                column_type = str(column.get("canonical_type") or column.get("type") or "text").strip()
+                if column_name:
+                    columns.append(f"{column_name} {column_type}")
+            schema_lines.append(f"- {table_name}({', '.join(columns)})")
+            table_rep_values = getattr(table, "representative_values", None) or {}
+            if table_rep_values:
+                representative_values[table_name] = self._prepare_representative_values(
+                    table_rep_values,
+                    geometry_columns=geometry_columns,
+                    limit=3,
+                )
+            for field in getattr(table, "spatial_fields", []):
+                if not isinstance(field, dict):
+                    continue
+                spatial_name = str(field.get("canonical_name") or "").strip()
+                crs = str(field.get("crs") or "null").strip()
+                if spatial_name:
+                    spatial_lines.append(f"- {table_name}.{spatial_name} (crs={crs})")
+        return schema_lines, spatial_lines, representative_values
 
     @staticmethod
     def _stringify_value(value: Any) -> str:

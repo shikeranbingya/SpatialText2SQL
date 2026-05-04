@@ -301,23 +301,51 @@ class PostGISFunctionLibrary:
             "extra-hard": min(4, max(2, len(database.selected_tables))),
         }[difficulty_level]
         desired_count = min(desired_count, len(candidates))
-        weights = np.array([self._sampling_weight(item) for item in candidates], dtype=float)
-        if weights.sum() <= 0:
-            weights = np.ones(len(candidates), dtype=float)
-        probs = weights / weights.sum()
-        indices = rng.choice(len(candidates), size=desired_count, replace=False, p=probs)
-        return [candidates[int(index)] for index in indices]
+        preferred_candidates = [item for item in candidates if self._prefer_st_function_source(item)]
+        fallback_candidates = [item for item in candidates if not self._prefer_st_function_source(item)]
+        selected: list[PostGISFunction] = []
+        remaining = desired_count
+        for pool in (preferred_candidates, fallback_candidates):
+            if remaining <= 0 or not pool:
+                continue
+            sampled = self._weighted_sample_without_replacement(pool, remaining, rng)
+            selected.extend(sampled)
+            remaining = desired_count - len(selected)
+        return selected
 
     @staticmethod
     def _sampling_weight(item: PostGISFunction) -> float:
         score = 1.0
         score += min(len(item.description), 400) / 400.0
         score += min(len(item.example_usages), 2) * 0.5
+        if PostGISFunctionLibrary._prefer_st_function_source(item):
+            score += 2.5
         if "spatial_predicate" in item.categories:
             score += 0.4
         if "spatial_join" in item.categories:
             score += 0.4
         return score
+
+    @staticmethod
+    def _prefer_st_function_source(item: PostGISFunction) -> bool:
+        return any(to_text(source).strip() == "ST_Function.md" for source in item.source)
+
+    @classmethod
+    def _weighted_sample_without_replacement(
+        cls,
+        candidates: Sequence[PostGISFunction],
+        desired_count: int,
+        rng: np.random.Generator,
+    ) -> list[PostGISFunction]:
+        sample_size = min(int(desired_count), len(candidates))
+        if sample_size <= 0:
+            return []
+        weights = np.array([cls._sampling_weight(item) for item in candidates], dtype=float)
+        if weights.sum() <= 0:
+            weights = np.ones(len(candidates), dtype=float)
+        probs = weights / weights.sum()
+        indices = rng.choice(len(candidates), size=sample_size, replace=False, p=probs)
+        return [candidates[int(index)] for index in indices]
 
     @staticmethod
     def _function_is_schema_compatible(

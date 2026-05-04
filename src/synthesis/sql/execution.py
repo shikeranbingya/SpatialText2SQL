@@ -38,6 +38,12 @@ class SQLExecutionChecker:
     def check(self, sql: str, database: SynthesizedSpatialDatabase) -> SQLExecutionResult:
         sql_text = to_text(sql).rstrip(";")
         if not self.execution_config.enable_execution_check or self.execution_config.dry_run:
+            LOGGER.info(
+                "Execution skipped | schema_id=%s | enable_execution_check=%s | dry_run=%s",
+                database.database_id,
+                self.execution_config.enable_execution_check,
+                self.execution_config.dry_run,
+            )
             return SQLExecutionResult(executed=False, success=True)
         if contains_dangerous_sql(sql_text):
             return SQLExecutionResult(
@@ -59,6 +65,12 @@ class SQLExecutionChecker:
         schema_name = normalize_postgres_identifier(database.database_id, prefix="schema")
         actual_database = f"{catalog_name}.{schema_name}"
         start = time.perf_counter()
+        LOGGER.info(
+            "Execution connect start | schema_id=%s | target=%s | sql_chars=%s",
+            database.database_id,
+            actual_database,
+            len(sql_text),
+        )
         try:
             conn = self._connect(catalog_name)
         except Exception as exc:
@@ -73,6 +85,12 @@ class SQLExecutionChecker:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 self._apply_session_settings(cur, schema_name)
                 execution_sql = f"EXPLAIN {sql_text}" if self.execution_config.explain_only else sql_text
+                LOGGER.info(
+                    "Execution query start | schema_id=%s | target=%s | explain_only=%s",
+                    database.database_id,
+                    actual_database,
+                    self.execution_config.explain_only,
+                )
                 cur.execute(execution_sql)
                 if self.execution_config.explain_only:
                     rows = cur.fetchmany(self.execution_config.max_result_rows_for_check)
@@ -83,6 +101,15 @@ class SQLExecutionChecker:
             empty_result = len(sample_rows) == 0
             success = not (
                 empty_result and self.execution_config.require_non_empty_result and not self.execution_config.explain_only
+            )
+            LOGGER.info(
+                "Execution query done | schema_id=%s | target=%s | success=%s | empty_result=%s | row_count=%s | time_ms=%.1f",
+                database.database_id,
+                actual_database,
+                success,
+                empty_result,
+                len(sample_rows),
+                elapsed_ms,
             )
             return SQLExecutionResult(
                 executed=True,
@@ -96,6 +123,13 @@ class SQLExecutionChecker:
             )
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
+            LOGGER.warning(
+                "Execution query failed | schema_id=%s | target=%s | time_ms=%.1f | error=%s",
+                database.database_id,
+                actual_database,
+                elapsed_ms,
+                exc,
+            )
             return SQLExecutionResult(
                 executed=True,
                 success=False,

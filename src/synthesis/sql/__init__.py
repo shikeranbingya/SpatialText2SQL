@@ -31,6 +31,7 @@ from .models import (
     SynthesizedSQLQuery,
 )
 from .parser import parse_sql_generation_response
+from .prompt_metadata import PostGISPromptMetadataProvider
 from .synthesizer import ConstraintGuidedSQLSynthesizer
 from .validator import SQLValidator, contains_dangerous_sql
 
@@ -43,6 +44,7 @@ __all__ = [
     "OpenAICompatibleSQLGenerator",
     "PostGISFunction",
     "PostGISFunctionLibrary",
+    "PostGISPromptMetadataProvider",
     "SQLExecutionChecker",
     "SQLExecutionCheckConfig",
     "SQLExecutionResult",

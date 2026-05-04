@@ -59,7 +59,35 @@ def _split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
-def _build_allowed_schema(database: SynthesizedSpatialDatabase) -> tuple[set[str], dict[str, set[str]]]:
+def _build_allowed_schema(
+    database: SynthesizedSpatialDatabase,
+    runtime_metadata: Mapping[str, object] | None = None,
+) -> tuple[set[str], dict[str, set[str]]]:
+    if isinstance(runtime_metadata, Mapping):
+        tables_payload = runtime_metadata.get("tables")
+        if isinstance(tables_payload, Sequence) and not isinstance(tables_payload, (str, bytes)):
+            allowed_tables: set[str] = set()
+            allowed_columns: dict[str, set[str]] = {}
+            union_columns: set[str] = set()
+            for table_meta in tables_payload:
+                if not isinstance(table_meta, Mapping):
+                    continue
+                table_name = to_text(table_meta.get("table_name"))
+                if not table_name:
+                    continue
+                allowed_tables.add(table_name)
+                columns = {
+                    to_text(column.get("column_name"))
+                    for column in table_meta.get("columns", [])
+                    if isinstance(column, Mapping)
+                }
+                columns = {column for column in columns if column}
+                allowed_columns[table_name] = columns
+                union_columns.update(columns)
+            if allowed_tables:
+                allowed_columns["*"] = union_columns
+                return allowed_tables, allowed_columns
+
     allowed_tables: set[str] = set()
     allowed_columns: dict[str, set[str]] = {}
     union_columns: set[str] = set()
@@ -203,6 +231,7 @@ class SQLValidator:
         database: SynthesizedSpatialDatabase,
         sampled_functions: Sequence[str],
         difficulty_level: str,
+        database_runtime_metadata: Mapping[str, object] | None = None,
     ) -> SQLValidationResult:
         sql_text = to_text(sql)
         errors: list[str] = []
@@ -228,7 +257,7 @@ class SQLValidator:
             detected_tables, aliases = _detect_tables_regex(sql_text)
             detected_columns = _detect_columns_regex(sql_text, aliases)
 
-        allowed_tables, allowed_columns = _build_allowed_schema(database)
+        allowed_tables, allowed_columns = _build_allowed_schema(database, database_runtime_metadata)
         unknown_tables = [table for table in detected_tables if table not in allowed_tables]
         if unknown_tables:
             errors.append(f"Unknown tables referenced: {', '.join(sorted(set(unknown_tables)))}")

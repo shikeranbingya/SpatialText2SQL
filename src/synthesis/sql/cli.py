@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ from .execution import SQLExecutionChecker
 from .function_library import PostGISFunctionLibrary
 from .generator import build_sql_generator
 from .io import load_input_databases, write_sql_queries
+from .prompt_metadata import PostGISPromptMetadataProvider
 from .synthesizer import ConstraintGuidedSQLSynthesizer
 from .validator import SQLValidator
 
@@ -133,15 +135,37 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=log_handlers,
     )
+    logging.info(
+        "SQL synthesis config loaded | provider=%s | model=%s | input=%s | output=%s | execution_check=%s | dry_run=%s | max_revision_rounds=%s",
+        config.llm.provider,
+        config.llm.model,
+        config.synthesis.input_path,
+        config.synthesis.output_path,
+        config.execution.enable_execution_check,
+        config.execution.dry_run,
+        config.synthesis.max_revision_rounds,
+    )
 
     databases = load_input_databases(config.synthesis.input_path)
     if not databases:
         raise ValueError("Input synthesized database file is empty.")
+    city_counts = Counter(item.city for item in databases)
+    logging.info(
+        "Loaded synthesized databases | count=%s | city_distribution=%s",
+        len(databases),
+        dict(city_counts),
+    )
 
     function_library = PostGISFunctionLibrary.load(
         config.functions.postgis_function_json_path,
         config.functions.st_function_markdown_path,
         config.functions.exclude_categories,
+    )
+    logging.info(
+        "Loaded PostGIS function library | functions=%s | json=%s | markdown=%s",
+        len(function_library.functions),
+        config.functions.postgis_function_json_path,
+        config.functions.st_function_markdown_path,
     )
     generator = build_sql_generator(
         provider=config.llm.provider,
@@ -153,9 +177,17 @@ def main(argv: list[str] | None = None) -> int:
         timeout=config.llm.timeout,
         max_retries=config.llm.max_retries,
     )
+    logging.info(
+        "Initialized SQL generator | provider=%s | model=%s | timeout=%ss | max_retries=%s",
+        config.llm.provider,
+        config.llm.model,
+        config.llm.timeout,
+        config.llm.max_retries,
+    )
     prompt_builder = PromptBuilder({"project_root": Path(__file__).resolve().parents[3]})
     validator = SQLValidator(function_library)
     execution_checker = SQLExecutionChecker(config.database, config.execution)
+    prompt_metadata_provider = PostGISPromptMetadataProvider(config.database)
     synthesizer = ConstraintGuidedSQLSynthesizer(
         config=config,
         function_library=function_library,
@@ -163,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         prompt_builder=prompt_builder,
         validator=validator,
         execution_checker=execution_checker,
+        prompt_metadata_provider=prompt_metadata_provider,
     )
     rows = synthesizer.synthesize_all(databases)
     write_sql_queries(config.synthesis.output_path, rows)

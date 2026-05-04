@@ -237,6 +237,9 @@ Default settings:
 - Output: `data/processed/synthesized_sql_queries.jsonl`
 - Database connection: `localhost:5432/syntheized`
 - `num_sql_per_database` supports per-city mapping, for example `nyc=8,sf=6` from CLI or a YAML mapping in `config/sql_synthesis.yaml`
+- `difficulty_weights` now control how many SQL samples are allocated to each difficulty bucket, and generation runs in fixed order: `easy -> medium -> hard -> extra-hard`
+- When compatible candidates exist, SQL synthesis samples PostGIS functions from `ST_Function.md` first, then falls back to other extracted PostGIS functions
+- SQL synthesis prompts now read `Schema`, `Spatial Field Metadata`, and `Representative Values` from the live synthesized PostGIS schema instead of file-side metadata, so prompt context matches the executable database exactly
 - The default config only enables `nyc: 8`; cities not listed will not emit SQL unless you add them or provide a `default` entry
 
 Edit persistent settings in `config/sql_synthesis.yaml`.

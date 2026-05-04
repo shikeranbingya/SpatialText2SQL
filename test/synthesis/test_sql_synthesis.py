@@ -10,6 +10,7 @@ from src.synthesis.sql import (
     MockSQLGenerator,
     OllamaSQLGenerator,
     PostGISFunctionLibrary,
+    PostGISPromptMetadataProvider,
     SQLExecutionChecker,
     SQLExecutionCheckConfig,
     SQLSynthesisConfig,
@@ -195,6 +196,16 @@ class FakeExecutionChecker:
         return self.results.pop(0)
 
 
+class FakePromptMetadataProvider:
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
+
+    def load_database_metadata(self, database):
+        self.calls.append(database.database_id)
+        return self.payload
+
+
 class SQLSynthesisTests(unittest.TestCase):
     def test_config_loading_and_override(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -247,6 +258,48 @@ class SQLSynthesisTests(unittest.TestCase):
             max_retries=1,
         )
         self.assertIsInstance(generator, OllamaSQLGenerator)
+
+    def test_sql_synthesis_prompt_limits_representative_values_and_masks_geometry(self):
+        table = CanonicalSpatialTable.from_dict(
+            {
+                "table_id": "t1",
+                "city": "nyc",
+                "table_name": "table_1",
+                "normalized_schema": [
+                    {"name": "name", "canonical_name": "name", "canonical_type": "text"},
+                    {"name": "geometry", "canonical_name": "geometry", "canonical_type": "spatial"},
+                ],
+                "spatial_fields": [{"canonical_name": "geometry", "crs": "EPSG:4326"}],
+                "representative_values": {
+                    "name": ["a", "b", "c", "d"],
+                    "geometry": [
+                        "POINT (1 2)",
+                        "POLYGON ((0 0, 1 0, 1 1, 0 0))",
+                        "LINESTRING (0 0, 1 1)",
+                        "POINT (9 9)",
+                    ],
+                },
+            }
+        )
+        database = SynthesizedSpatialDatabase.from_selected_tables(
+            database_id="nyc_0001",
+            city="nyc",
+            selected_tables=[table],
+            sampling_trace=[],
+            graph_stats={},
+            synthesize_config={},
+        )
+        prompt_builder = PromptBuilder({"project_root": Path.cwd()})
+        prompt = prompt_builder.build_sql_synthesis_prompt(
+            database=database,
+            difficulty_level="easy",
+            structural_constraints={"difficulty_level": "easy"},
+            sampled_functions=[],
+        )
+        representative_section = prompt.split("## Representative Values", 1)[1].split("## Difficulty Constraint", 1)[0].strip()
+        representative_values = json.loads(representative_section)
+        self.assertEqual(representative_values["table_1"]["name"], ["a", "b", "c"])
+        self.assertEqual(representative_values["table_1"]["geometry"], ["POINT", "POLYGON", "LINESTRING"])
 
     def test_ollama_generator_uses_openai_style_client(self):
         generator = OllamaSQLGenerator(
@@ -322,6 +375,24 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertEqual(sample1, sample2)
         self.assertTrue(sample1)
 
+    def test_function_sampling_prefers_st_function_markdown_sources(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "postgis.json"
+            md_path = Path(tmpdir) / "ST_Function.md"
+            json_path.write_text(
+                json.dumps(_sample_function_json_payload()[:3], ensure_ascii=False),
+                encoding="utf-8",
+            )
+            md_path.write_text("## spatialsql_pg\nST_Buffer\n", encoding="utf-8")
+            library = PostGISFunctionLibrary.load(json_path, md_path, ["raster", "topology"])
+        import numpy as np
+
+        db = _make_database(table_count=1)
+        sampled = library.sample_functions(db, "easy", np.random.default_rng(11))
+        self.assertEqual(len(sampled), 1)
+        self.assertEqual(sampled[0].function_name, "ST_Buffer")
+        self.assertIn("ST_Function.md", sampled[0].source)
+
     def test_prompt_builder_contains_required_sql_context(self):
         builder = PromptBuilder({"project_root": Path.cwd()})
         database = _make_database(table_count=2)
@@ -345,6 +416,47 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertIn("used_spatial_functions", prompt)
         self.assertIn("Return a JSON object only", prompt)
 
+    def test_prompt_builder_prefers_live_postgis_metadata(self):
+        builder = PromptBuilder({"project_root": Path.cwd()})
+        database = _make_database(table_count=1)
+        runtime_metadata = {
+            "tables": [
+                {
+                    "table_name": "table_1",
+                    "columns": [
+                        {"column_name": "id", "column_type": "integer"},
+                        {"column_name": "name", "column_type": "text"},
+                        {"column_name": "shape", "column_type": "geography(Point,4326)"},
+                    ],
+                    "spatial_fields": [
+                        {
+                            "column_name": "shape",
+                            "column_type": "geography(Point,4326)",
+                            "spatial_type": "geography",
+                            "geometry_type": "POINT",
+                            "srid": 4326,
+                        }
+                    ],
+                    "representative_values": {
+                        "name": ["hydrant", "valve"],
+                        "shape": ["POINT (SRID=4326)"],
+                    },
+                }
+            ]
+        }
+        prompt = builder.build_sql_synthesis_prompt(
+            database=database,
+            difficulty_level="easy",
+            structural_constraints={"min_tables": 1},
+            sampled_functions=[{"function_name": "ST_DWithin"}],
+            database_runtime_metadata=runtime_metadata,
+        )
+        self.assertIn("table_1(id integer, name text, shape geography(Point,4326))", prompt)
+        self.assertIn("family=geography", prompt)
+        self.assertIn('"hydrant"', prompt)
+        self.assertIn("Geometry and geography are different types", prompt)
+        self.assertNotIn("geom spatial", prompt)
+
     def test_feedback_prompt_contains_errors_and_empty_result(self):
         builder = PromptBuilder({"project_root": Path.cwd()})
         database = _make_database(table_count=1)
@@ -361,6 +473,48 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertIn("Unknown tables referenced", prompt)
         self.assertIn("relation does not exist", prompt)
         self.assertIn("empty_result: true", prompt)
+
+    def test_feedback_prompt_uses_live_postgis_metadata(self):
+        builder = PromptBuilder({"project_root": Path.cwd()})
+        database = _make_database(table_count=1)
+        runtime_metadata = {
+            "tables": [
+                {
+                    "table_name": "table_1",
+                    "columns": [
+                        {"column_name": "id", "column_type": "integer"},
+                        {"column_name": "footprint", "column_type": "geometry(MultiPolygon,3857)"},
+                    ],
+                    "spatial_fields": [
+                        {
+                            "column_name": "footprint",
+                            "column_type": "geometry(MultiPolygon,3857)",
+                            "spatial_type": "geometry",
+                            "geometry_type": "MULTIPOLYGON",
+                            "srid": 3857,
+                        }
+                    ],
+                    "representative_values": {
+                        "id": [1, 2, 3],
+                    },
+                }
+            ]
+        }
+        prompt = builder.build_sql_feedback_prompt(
+            database=database,
+            difficulty_level="easy",
+            structural_constraints={"min_tables": 1},
+            sampled_functions=[{"function_name": "ST_Buffer"}],
+            original_candidate={"sql": "SELECT * FROM t"},
+            validation_errors=["x"],
+            execution_error="boom",
+            empty_result=False,
+            database_runtime_metadata=runtime_metadata,
+        )
+        self.assertIn("footprint geometry(MultiPolygon,3857)", prompt)
+        self.assertIn("geometry_type=MULTIPOLYGON", prompt)
+        self.assertIn('"id": [', prompt)
+        self.assertIn("geometry/geography signature mismatches", prompt)
 
     def test_response_parser_supports_json_and_markdown_json(self):
         plain = parse_sql_generation_response(
@@ -398,6 +552,36 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         self.assertTrue(valid.is_valid)
         self.assertIn("ST_Buffer", valid.detected_spatial_functions)
+
+    def test_validator_prefers_live_postgis_schema_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_path = Path(tmpdir) / "postgis.json"
+            md_path = Path(tmpdir) / "ST_Function.md"
+            json_path.write_text(json.dumps(_sample_function_json_payload(), ensure_ascii=False), encoding="utf-8")
+            md_path.write_text(_sample_function_markdown(), encoding="utf-8")
+            library = PostGISFunctionLibrary.load(json_path, md_path, ["raster", "topology"])
+        validator = SQLValidator(library)
+        database = _make_database(table_count=1)
+        runtime_metadata = {
+            "tables": [
+                {
+                    "table_name": "table_1",
+                    "columns": [
+                        {"column_name": "id", "column_type": "integer"},
+                        {"column_name": "shape", "column_type": "geography(Point,4326)"},
+                    ],
+                }
+            ]
+        }
+        result = validator.validate(
+            sql="SELECT ST_Buffer(t.shape::geometry, 10) FROM table_1 t LIMIT 5",
+            database=database,
+            sampled_functions=["ST_Buffer"],
+            difficulty_level="easy",
+            database_runtime_metadata=runtime_metadata,
+        )
+        self.assertTrue(result.is_valid)
+        self.assertIn("shape", result.detected_columns)
 
     def test_execution_checker_rejects_write_operations(self):
         checker = SQLExecutionChecker(
@@ -487,6 +671,8 @@ class SQLSynthesisTests(unittest.TestCase):
             rows = synthesizer.synthesize_for_database(database)
         self.assertEqual(len(rows), 1)
         log_text = "\n".join(captured.output)
+        self.assertIn("LLM prompt | sample=nyc/nyc_0001/sql_0001 | round=1/2", log_text)
+        self.assertIn("## Task Goal", log_text)
         self.assertIn("SQL synthesis progress 1/1", log_text)
         self.assertIn("city=nyc", log_text)
         self.assertIn("schema_id=nyc_0001", log_text)
@@ -537,6 +723,53 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].revision_rounds, 1)
         self.assertIn("empty_result", rows[0].feedback_prompts[0])
+
+    def test_synthesizer_uses_live_postgis_metadata_in_prompt(self):
+        library = _load_library([_sample_function_json_payload()[1]], "## spatialsql_pg\nST_Buffer\n")
+        database = _make_database(table_count=1)
+        runtime_metadata = {
+            "tables": [
+                {
+                    "table_name": "table_1",
+                    "columns": [
+                        {"column_name": "id", "column_type": "integer"},
+                        {"column_name": "name", "column_type": "text"},
+                        {"column_name": "shape", "column_type": "geography(Point,4326)"},
+                    ],
+                    "spatial_fields": [
+                        {
+                            "column_name": "shape",
+                            "column_type": "geography(Point,4326)",
+                            "spatial_type": "geography",
+                            "geometry_type": "POINT",
+                            "srid": 4326,
+                        }
+                    ],
+                    "representative_values": {"name": ["hydrant", "valve"]},
+                }
+            ]
+        }
+        generator = MockSQLGenerator(
+            responses=['{"sql":"SELECT ST_Buffer(t.shape::geometry, 10) FROM table_1 t LIMIT 5","used_tables":["table_1"],"used_columns":["shape"],"used_spatial_functions":["ST_Buffer"],"reasoning_summary":"ok"}']
+        )
+        from src.synthesis.sql.models import SQLExecutionResult
+
+        provider = FakePromptMetadataProvider(runtime_metadata)
+        synthesizer = ConstraintGuidedSQLSynthesizer(
+            config=_make_config(synthesis={"max_revision_rounds": 0}),
+            function_library=library,
+            sql_generator=generator,
+            prompt_builder=PromptBuilder({"project_root": Path.cwd()}),
+            validator=SQLValidator(library),
+            execution_checker=FakeExecutionChecker([SQLExecutionResult(executed=True, success=True, row_count=1)]),
+            prompt_metadata_provider=provider,
+        )
+        rows = synthesizer.synthesize_for_database(database)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(provider.calls, ["nyc_0001"])
+        self.assertIn("shape geography(Point,4326)", generator.prompts[0])
+        self.assertIn('"hydrant"', generator.prompts[0])
+        self.assertNotIn("geom spatial", generator.prompts[0])
 
     def test_random_seed_keeps_sampling_prompt_reproducible(self):
         library = _load_library([_sample_function_json_payload()[0]], "## spatialsql_pg\nST_DWithin\n")
@@ -619,6 +852,34 @@ class SQLSynthesisTests(unittest.TestCase):
         sf_rows = synthesizer.synthesize_for_database(_make_database(table_count=1, database_id="sf_0001"))
         self.assertEqual(len(nyc_rows), 2)
         self.assertEqual(len(sf_rows), 0)
+
+    def test_difficulty_plan_follows_weights_in_easy_to_extra_hard_order(self):
+        library = _load_library(_sample_function_json_payload()[:3], _sample_function_markdown())
+        config = _make_config(
+            synthesis={
+                "num_sql_per_database": {"nyc": 8},
+                "difficulty_weights": {
+                    "easy": 1,
+                    "medium": 1,
+                    "hard": 1,
+                    "extra-hard": 1,
+                },
+                "max_revision_rounds": 0,
+            }
+        )
+        synthesizer = ConstraintGuidedSQLSynthesizer(
+            config=config,
+            function_library=library,
+            sql_generator=MockSQLGenerator(responses=[]),
+            prompt_builder=PromptBuilder({"project_root": Path.cwd()}),
+            validator=SQLValidator(library),
+            execution_checker=FakeExecutionChecker([]),
+        )
+        rows = synthesizer._build_difficulty_plan(_make_database(table_count=3, database_id="nyc_0001"), 8)
+        self.assertEqual(
+            rows,
+            ["easy", "easy", "medium", "medium", "hard", "hard", "extra-hard", "extra-hard"],
+        )
 
 
 if __name__ == "__main__":

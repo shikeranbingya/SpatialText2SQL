@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
+import time
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -23,6 +25,7 @@ from .models import (
     SynthesizedSQLQuery,
 )
 from .parser import parse_sql_generation_response
+from .prompt_metadata import PostGISPromptMetadataProvider
 from .validator import SQLValidator
 
 LOGGER = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ class ConstraintGuidedSQLSynthesizer:
         prompt_builder: PromptBuilder,
         validator: SQLValidator | None = None,
         execution_checker: SQLExecutionChecker | None = None,
+        prompt_metadata_provider: PostGISPromptMetadataProvider | None = None,
     ) -> None:
         self.config = config
         self.function_library = function_library
@@ -48,13 +52,23 @@ class ConstraintGuidedSQLSynthesizer:
             config.database,
             config.execution,
         )
+        self.prompt_metadata_provider = prompt_metadata_provider
         self.rng = np.random.default_rng(self.config.synthesis.random_seed)
+
+    @staticmethod
+    def _sample_tag(database: SynthesizedSpatialDatabase, sample_index: int) -> str:
+        return f"{database.city}/{database.database_id}/sql_{sample_index + 1:04d}"
 
     @staticmethod
     def _format_function_names(sampled_functions: Sequence[Any]) -> str:
         names = [to_text(getattr(item, "function_name", "")) for item in sampled_functions]
         names = [name for name in names if name]
         return ", ".join(names) if names else "<none>"
+
+    @staticmethod
+    def _format_sql_for_log(sql_text: str) -> str:
+        sql_text = (sql_text or "").strip()
+        return sql_text or "<empty>"
 
     def _log_sample_progress(
         self,
@@ -106,30 +120,70 @@ class ConstraintGuidedSQLSynthesizer:
                 database.city,
             )
             return []
+        database_runtime_metadata = None
+        if self.prompt_metadata_provider is not None:
+            database_runtime_metadata = self.prompt_metadata_provider.load_database_metadata(database)
+            if database_runtime_metadata:
+                runtime_tables = database_runtime_metadata.get("tables", [])
+                runtime_spatial_fields = sum(
+                    len(item.get("spatial_fields", []))
+                    for item in runtime_tables
+                    if isinstance(item, Mapping)
+                )
+                LOGGER.info(
+                    "Loaded live prompt metadata | city=%s | schema_id=%s | tables=%s | spatial_fields=%s",
+                    database.city,
+                    database.database_id,
+                    len(runtime_tables),
+                    runtime_spatial_fields,
+                )
+            else:
+                LOGGER.warning(
+                    "Falling back to file-derived prompt metadata | city=%s | schema_id=%s",
+                    database.city,
+                    database.database_id,
+                )
         output_rows: list[SynthesizedSQLQuery] = []
-        for sample_index in range(target_count):
-            difficulty_level = self._sample_difficulty(database)
-            structural_constraints = self._build_structural_constraints(difficulty_level, database)
-            sampled_functions = self.function_library.sample_functions(
+        difficulty_plan = self._build_difficulty_plan(database, target_count)
+        difficulty_counts = Counter(difficulty_plan)
+        LOGGER.info(
+            "Difficulty plan | city=%s | schema_id=%s | target_count=%s | counts=%s",
+            database.city,
+            database.database_id,
+            target_count,
+            {level: difficulty_counts.get(level, 0) for level in DIFFICULTY_LEVELS},
+        )
+        for sample_index, planned_difficulty in enumerate(difficulty_plan):
+            difficulty_level, sampled_functions = self._resolve_sampled_functions(
                 database=database,
-                difficulty_level=difficulty_level,
-                rng=self.rng,
+                planned_difficulty=planned_difficulty,
             )
             if not sampled_functions:
                 LOGGER.warning(
-                    "SQL synthesis progress %s/%s | city=%s | schema_id=%s | spatial_functions=<none> | status=no-compatible-functions",
+                    "SQL synthesis progress %s/%s | city=%s | schema_id=%s | planned_difficulty=%s | spatial_functions=<none> | status=no-compatible-functions",
                     sample_index + 1,
                     target_count,
                     database.city,
                     database.database_id,
+                    planned_difficulty,
                 )
                 continue
+            if difficulty_level != planned_difficulty:
+                LOGGER.info(
+                    "Difficulty adjusted for sampling | city=%s | schema_id=%s | planned=%s | actual=%s",
+                    database.city,
+                    database.database_id,
+                    planned_difficulty,
+                    difficulty_level,
+                )
+            structural_constraints = self._build_structural_constraints(difficulty_level, database)
             row = self._synthesize_single_query(
                 database=database,
                 sample_index=sample_index,
                 difficulty_level=difficulty_level,
                 structural_constraints=structural_constraints,
                 sampled_functions=sampled_functions,
+                database_runtime_metadata=database_runtime_metadata,
             )
             self._log_sample_progress(
                 database=database,
@@ -151,12 +205,30 @@ class ConstraintGuidedSQLSynthesizer:
         difficulty_level: str,
         structural_constraints: Mapping[str, Any],
         sampled_functions: Sequence[Any],
+        database_runtime_metadata: Mapping[str, Any] | None,
     ) -> SynthesizedSQLQuery | None:
+        sample_tag = self._sample_tag(database, sample_index)
+        prompt_build_start = time.perf_counter()
+        LOGGER.info(
+            "SQL synthesis start | sample=%s | difficulty=%s | tables=%s | candidate_functions=%s",
+            sample_tag,
+            difficulty_level,
+            len(database.selected_tables),
+            self._format_function_names(sampled_functions),
+        )
         prompt = self.prompt_builder.build_sql_synthesis_prompt(
             database=database,
             difficulty_level=difficulty_level,
             structural_constraints=dict(structural_constraints),
             sampled_functions=[item.to_dict() for item in sampled_functions],
+            database_runtime_metadata=dict(database_runtime_metadata) if isinstance(database_runtime_metadata, Mapping) else None,
+        )
+        prompt_build_ms = (time.perf_counter() - prompt_build_start) * 1000.0
+        LOGGER.info(
+            "Prompt built | sample=%s | prompt_chars=%s | build_time_ms=%.1f",
+            sample_tag,
+            len(prompt),
+            prompt_build_ms,
         )
         feedback_prompts: list[str] = []
         generation_rounds: list[dict[str, Any]] = []
@@ -166,7 +238,33 @@ class ConstraintGuidedSQLSynthesizer:
         current_prompt = prompt
 
         for revision_round in range(self.config.synthesis.max_revision_rounds + 1):
+            LOGGER.info(
+                "LLM prompt | sample=%s | round=%s/%s\n%s",
+                sample_tag,
+                revision_round + 1,
+                self.config.synthesis.max_revision_rounds + 1,
+                current_prompt,
+            )
+            LOGGER.info(
+                "LLM request start | sample=%s | round=%s/%s | prompt_type=%s | prompt_chars=%s",
+                sample_tag,
+                revision_round + 1,
+                self.config.synthesis.max_revision_rounds + 1,
+                "initial" if revision_round == 0 else "feedback",
+                len(current_prompt),
+            )
+            generation_start = time.perf_counter()
             generation_response = self.sql_generator.generate(current_prompt)
+            generation_ms = (time.perf_counter() - generation_start) * 1000.0
+            LOGGER.info(
+                "LLM request done | sample=%s | round=%s/%s | attempts=%s | response_chars=%s | time_ms=%.1f",
+                sample_tag,
+                revision_round + 1,
+                self.config.synthesis.max_revision_rounds + 1,
+                generation_response.attempts,
+                len(generation_response.text or ""),
+                generation_ms,
+            )
             candidate = parse_sql_generation_response(
                 generation_response.text,
                 raw_response=generation_response.raw_response,
@@ -183,21 +281,93 @@ class ConstraintGuidedSQLSynthesizer:
             )
 
             if candidate.parse_error:
+                LOGGER.warning(
+                    "Candidate parse failed | sample=%s | round=%s/%s | error=%s",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                    candidate.parse_error,
+                )
                 validation_result = SQLValidationResult(
                     is_valid=False,
                     errors=[candidate.parse_error],
                 )
                 execution_result = SQLExecutionResult(executed=False, success=False, error_message="Skipped due to parse failure.")
             else:
+                LOGGER.info(
+                    "Generated SQL | sample=%s | round=%s/%s\n%s",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                    self._format_sql_for_log(candidate.sql),
+                )
+                LOGGER.info(
+                    "Static validation start | sample=%s | round=%s/%s | sql_chars=%s",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                    len(candidate.sql or ""),
+                )
+                validation_start = time.perf_counter()
                 validation_result = self.validator.validate(
                     sql=candidate.sql,
                     database=database,
                     sampled_functions=[item.function_name for item in sampled_functions],
                     difficulty_level=difficulty_level,
+                    database_runtime_metadata=dict(database_runtime_metadata) if isinstance(database_runtime_metadata, Mapping) else None,
+                )
+                validation_ms = (time.perf_counter() - validation_start) * 1000.0
+                LOGGER.info(
+                    "Static validation done | sample=%s | round=%s/%s | is_valid=%s | errors=%s | detected_tables=%s | detected_spatial_functions=%s | time_ms=%.1f",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                    validation_result.is_valid,
+                    len(validation_result.errors),
+                    len(validation_result.detected_tables),
+                    ", ".join(validation_result.detected_spatial_functions) or "<none>",
+                    validation_ms,
                 )
                 if validation_result.is_valid:
+                    LOGGER.info(
+                        "Execution check start | sample=%s | round=%s/%s | dry_run=%s | explain_only=%s",
+                        sample_tag,
+                        revision_round + 1,
+                        self.config.synthesis.max_revision_rounds + 1,
+                        self.config.execution.dry_run,
+                        self.config.execution.explain_only,
+                    )
                     execution_result = self.execution_checker.check(candidate.sql, database)
+                    LOGGER.info(
+                        "Execution check done | sample=%s | round=%s/%s | success=%s | executed=%s | empty_result=%s | row_count=%s | time_ms=%s | error=%s",
+                        sample_tag,
+                        revision_round + 1,
+                        self.config.synthesis.max_revision_rounds + 1,
+                        execution_result.success,
+                        execution_result.executed,
+                        execution_result.empty_result,
+                        execution_result.row_count,
+                        execution_result.execution_time_ms,
+                        execution_result.error_message or "",
+                    )
+                    if not execution_result.success:
+                        LOGGER.warning(
+                            "Execution failed | sample=%s | round=%s/%s | error=%s\n%s",
+                            sample_tag,
+                            revision_round + 1,
+                            self.config.synthesis.max_revision_rounds + 1,
+                            execution_result.error_message or "",
+                            self._format_sql_for_log(candidate.sql),
+                        )
                 else:
+                    LOGGER.warning(
+                        "Static validation failed | sample=%s | round=%s/%s | errors=%s\n%s",
+                        sample_tag,
+                        revision_round + 1,
+                        self.config.synthesis.max_revision_rounds + 1,
+                        " | ".join(validation_result.errors),
+                        self._format_sql_for_log(candidate.sql),
+                    )
                     execution_result = SQLExecutionResult(
                         executed=False,
                         success=False,
@@ -205,8 +375,21 @@ class ConstraintGuidedSQLSynthesizer:
                     )
 
             if self._is_sample_success(validation_result, execution_result):
+                LOGGER.info(
+                    "Sample succeeded | sample=%s | round=%s/%s\n%s",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                    self._format_sql_for_log(candidate.sql),
+                )
                 break
             if revision_round >= self.config.synthesis.max_revision_rounds:
+                LOGGER.info(
+                    "Sample exhausted revisions | sample=%s | final_round=%s/%s",
+                    sample_tag,
+                    revision_round + 1,
+                    self.config.synthesis.max_revision_rounds + 1,
+                )
                 break
 
             feedback_prompt = self.prompt_builder.build_sql_feedback_prompt(
@@ -218,8 +401,19 @@ class ConstraintGuidedSQLSynthesizer:
                 validation_errors=list(validation_result.errors),
                 execution_error=execution_result.error_message,
                 empty_result=execution_result.empty_result,
+                database_runtime_metadata=dict(database_runtime_metadata) if isinstance(database_runtime_metadata, Mapping) else None,
             )
             feedback_prompts.append(feedback_prompt)
+            LOGGER.info(
+                "Feedback prompt built | sample=%s | next_round=%s/%s | prompt_chars=%s | validation_errors=%s | execution_error=%s | empty_result=%s",
+                sample_tag,
+                revision_round + 2,
+                self.config.synthesis.max_revision_rounds + 1,
+                len(feedback_prompt),
+                len(validation_result.errors),
+                execution_result.error_message or "",
+                execution_result.empty_result,
+            )
             current_prompt = feedback_prompt
 
         synthesized = SynthesizedSQLQuery(
@@ -263,10 +457,17 @@ class ConstraintGuidedSQLSynthesizer:
             return 0
         return max(int(config_value), 0)
 
-    def _sample_difficulty(self, database: SynthesizedSpatialDatabase) -> str:
+    def _build_difficulty_plan(
+        self,
+        database: SynthesizedSpatialDatabase,
+        target_count: int,
+    ) -> list[str]:
+        if target_count <= 0:
+            return []
         fixed = to_text(self.config.synthesis.fixed_difficulty).lower()
         if fixed:
-            return self._downgrade_difficulty_if_needed(fixed, database)
+            planned = self._downgrade_difficulty_if_needed(fixed, database)
+            return [planned] * target_count
 
         weights = dict(self.config.synthesis.difficulty_weights)
         for level in DIFFICULTY_LEVELS:
@@ -274,12 +475,61 @@ class ConstraintGuidedSQLSynthesizer:
             if downgraded != level:
                 weights[level] = 0.0
         if sum(weights.values()) <= 0:
-            return self._downgrade_difficulty_if_needed("easy", database)
-        levels = list(DIFFICULTY_LEVELS)
-        probabilities = np.array([max(weights[level], 0.0) for level in levels], dtype=float)
-        probabilities = probabilities / probabilities.sum()
-        sampled = levels[int(self.rng.choice(len(levels), p=probabilities))]
-        return self._downgrade_difficulty_if_needed(sampled, database)
+            fallback = self._downgrade_difficulty_if_needed("easy", database)
+            return [fallback] * target_count
+        difficulty_counts = self._allocate_difficulty_counts(target_count, weights)
+        plan: list[str] = []
+        for level in DIFFICULTY_LEVELS:
+            plan.extend([level] * difficulty_counts.get(level, 0))
+        return plan
+
+    def _resolve_sampled_functions(
+        self,
+        *,
+        database: SynthesizedSpatialDatabase,
+        planned_difficulty: str,
+    ) -> tuple[str, list[Any]]:
+        try:
+            base_index = DIFFICULTY_LEVELS.index(planned_difficulty)
+        except ValueError:
+            base_index = 0
+        candidate_levels = list(DIFFICULTY_LEVELS[base_index:]) + list(reversed(DIFFICULTY_LEVELS[:base_index]))
+        for difficulty_level in candidate_levels:
+            sampled_functions = self.function_library.sample_functions(
+                database=database,
+                difficulty_level=difficulty_level,
+                rng=self.rng,
+            )
+            if sampled_functions:
+                return difficulty_level, sampled_functions
+        return planned_difficulty, []
+
+    @staticmethod
+    def _allocate_difficulty_counts(
+        target_count: int,
+        weights: Mapping[str, float],
+    ) -> dict[str, int]:
+        if target_count <= 0:
+            return {level: 0 for level in DIFFICULTY_LEVELS}
+        positive_weights = np.array([max(float(weights.get(level, 0.0)), 0.0) for level in DIFFICULTY_LEVELS], dtype=float)
+        total_weight = float(positive_weights.sum())
+        if total_weight <= 0.0:
+            return {level: 0 for level in DIFFICULTY_LEVELS}
+        raw_counts = positive_weights / total_weight * float(target_count)
+        base_counts = np.floor(raw_counts).astype(int)
+        remainder = target_count - int(base_counts.sum())
+        if remainder > 0:
+            fractional = raw_counts - base_counts
+            ranked_indices = sorted(
+                range(len(DIFFICULTY_LEVELS)),
+                key=lambda idx: (-fractional[idx], idx),
+            )
+            for idx in ranked_indices[:remainder]:
+                base_counts[idx] += 1
+        return {
+            level: int(base_counts[idx])
+            for idx, level in enumerate(DIFFICULTY_LEVELS)
+        }
 
     @staticmethod
     def _downgrade_difficulty_if_needed(difficulty: str, database: SynthesizedSpatialDatabase) -> str:
