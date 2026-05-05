@@ -195,6 +195,7 @@ class QuestionGenerationTests(unittest.TestCase):
         self.assertIn("## Spatial Relation Constraint", prompt)
         self.assertIn('"question"', prompt)
         self.assertIn('"style"', prompt)
+        self.assertIn('"name": "parks_sample"', prompt)
 
     def test_feedback_prompt_contains_validation_errors(self):
         database = _make_database()
@@ -215,6 +216,36 @@ class QuestionGenerationTests(unittest.TestCase):
         self.assertIn("Validation Errors", prompt)
         self.assertIn("100", prompt)
         self.assertIn("Original Candidate", prompt)
+
+    def test_question_prompt_uses_row_oriented_representative_values_with_nulls(self):
+        database = _make_database()
+        context = _make_context(database)
+        payload = context.to_prompt_payload()
+        payload["table_contexts"][0]["representative_values"] = {
+            "name": ["central park", None, "prospect park"],
+            "geom": ["POINT (1 2)", None, "POINT (3 4)"],
+        }
+        sql = _make_sql_source("SELECT p.name FROM parks p WHERE ST_DWithin(p.geom, p.geom, 100)")
+        features = SQLFeatureExtractor().extract(sql.sql)
+        constraints = SpatialPhraseSelector().build_constraints(features=features, rng=np.random.default_rng(11))
+        prompt_builder = PromptBuilder({"project_root": Path(__file__).resolve().parents[2]})
+        prompt = prompt_builder.build_question_generation_prompt(
+            sql_query=sql,
+            database_context=payload,
+            sql_features=features.to_dict(),
+            style_constraint={"style": "factual_lookup", "description": "Ask directly."},
+            spatial_relation_constraints=[item.to_dict() for item in constraints],
+        )
+        representative_section = prompt.split("## Representative Values", 1)[1].split("## SQL Feature Summary", 1)[0].strip()
+        representative_values = json.loads(representative_section)
+        self.assertEqual(
+            representative_values["parks"],
+            [
+                {"geom": "POINT", "name": "central park"},
+                {"geom": None, "name": None},
+                {"geom": "POINT", "name": "prospect park"},
+            ],
+        )
 
     def test_response_parser_handles_json_and_markdown(self):
         parsed = parse_question_generation_response(

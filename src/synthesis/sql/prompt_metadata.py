@@ -30,7 +30,7 @@ LOGGER = logging.getLogger(__name__)
 class PostGISPromptMetadataProvider:
     """Fetch schema and representative values from the live synthesized PostGIS catalog."""
 
-    MAX_REPRESENTATIVE_VALUES = 3
+    MAX_REPRESENTATIVE_ROWS = 3
     MAX_SAMPLE_ROWS = 12
     MAX_TEXT_LENGTH = 120
 
@@ -262,34 +262,31 @@ class PostGISPromptMetadataProvider:
         schema_name: str,
         table_name: str,
         columns: Sequence[Mapping[str, Any]],
-    ) -> dict[str, list[Any]]:
+    ) -> list[dict[str, Any]]:
         if not columns:
-            return {}
+            return []
         query = self._build_sample_query(schema_name=schema_name, table_name=table_name, columns=columns)
         cursor.execute(query, (self.MAX_SAMPLE_ROWS,))
         rows = cursor.fetchall() or []
-        representative_values: dict[str, list[Any]] = {}
-        for column in columns:
-            column_name = to_text(column.get("column_name"))
-            if not column_name:
+        representative_rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            if not isinstance(row, Mapping):
                 continue
-            samples: list[Any] = []
-            seen: set[str] = set()
-            for row in rows:
-                raw_value = row.get(column_name) if isinstance(row, Mapping) else None
-                normalized = self._normalize_sample_value(raw_value)
-                if normalized in (None, ""):
+            normalized_row: dict[str, Any] = {}
+            for column in columns:
+                column_name = to_text(column.get("column_name"))
+                if not column_name:
                     continue
-                signature = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
-                if signature in seen:
-                    continue
-                seen.add(signature)
-                samples.append(normalized)
-                if len(samples) >= self.MAX_REPRESENTATIVE_VALUES:
-                    break
-            if samples:
-                representative_values[column_name] = samples
-        return representative_values
+                normalized_row[column_name] = self._normalize_sample_value(row.get(column_name))
+            signature = json.dumps(normalized_row, ensure_ascii=False, sort_keys=True)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            representative_rows.append(normalized_row)
+            if len(representative_rows) >= self.MAX_REPRESENTATIVE_ROWS:
+                break
+        return representative_rows
 
     def _build_sample_query(
         self,

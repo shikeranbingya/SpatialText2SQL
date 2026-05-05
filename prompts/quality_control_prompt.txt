@@ -1,0 +1,41 @@
+You are judging whether one spatial NL-SQL pair is suitable for Text-to-SQL training.
+
+## Task Goal
+Decide whether the natural-language question and the SQL query are semantically aligned and training-ready.
+Be conservative. If the pair is not clearly aligned, fail it.
+
+## Candidate Pair
+{{sample_block}}
+
+## Database Schema
+{{schema_block}}
+
+## SQL Feature Summary
+{{sql_feature_block}}
+
+## SQL Execution Summary
+{{execution_summary_block}}
+
+## Representative Values
+{{representative_values_block}}
+
+## Judgment Rules
+{{judge_rules_block}}
+
+## Decision Criteria
+- Pass only if the question matches the SQL semantics exactly enough for supervised training.
+- Check entities, filters, aggregation, grouping, ordering, top-k, comparison direction, spatial relation direction, and distance thresholds.
+- Use the SQL execution summary as supporting evidence. If execution failed or the preview contradicts the question, fail the pair.
+- Do not reward vague questions that omit key SQL constraints.
+- Do not reward questions that add unsupported requirements absent from the SQL.
+- Do not output explanations beyond the compact JSON format below.
+
+## Output Format
+Return one compact JSON object only, with no Markdown code fences:
+{"decision":"pass|fail","confidence":"high|medium|low","reason_codes":["code1","code2"]}
+
+## Output Constraints
+- Keep `reason_codes` short and machine-readable.
+- Use at most 2 reason codes.
+- If the pair passes, return `["ok"]`.
+- Do not include any extra keys.

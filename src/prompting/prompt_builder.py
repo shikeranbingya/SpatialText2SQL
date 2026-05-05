@@ -37,6 +37,13 @@ class PromptBuilder:
             config.get("prompt_enhancement_registry")
             or PromptEnhancementRegistry(self.project_root)
         )
+        self.named_prompt_templates = {
+            "sql_synthesis": self.project_root / "prompts" / "sql_synthesis_prompt.txt",
+            "sql_feedback": self.project_root / "prompts" / "sql_feedback_prompt.txt",
+            "question_generation": self.project_root / "prompts" / "question_generation_prompt.txt",
+            "question_feedback": self.project_root / "prompts" / "question_feedback_prompt.txt",
+            "quality_control": self.project_root / "prompts" / "quality_control_prompt.txt",
+        }
     
     def build_prompt(
         self,
@@ -119,59 +126,21 @@ class PromptBuilder:
                 }
             )
 
-        prompt = f"""
-You are generating a single PostgreSQL/PostGIS SQL query for synthetic dataset construction.
-
-## Task Goal
-Generate exactly one executable PostgreSQL/PostGIS read-only SQL query for database "{getattr(database, 'database_id', '')}".
-The query must be spatially meaningful, executable, and consistent with the requested difficulty level.
-
-## Database Context
-- database_id: {getattr(database, 'database_id', '')}
-- city: {getattr(database, 'city', '')}
-- selected_tables: {', '.join(getattr(database, 'selected_table_names', []) or [])}
-
-## Schema
-{chr(10).join(schema_lines)}
-
-## Spatial Field Metadata
-{chr(10).join(spatial_lines) if spatial_lines else 'No spatial fields listed.'}
-
-## Representative Values
-{self._stable_json_text(representative_values)}
-
-## Difficulty Constraint
-{self._stable_json_text(structural_constraints)}
-
-## Required PostGIS Function Constraints
-Use at least one sampled PostGIS function. Prefer using all compatible sampled functions when possible.
-{self._stable_json_text(functions_payload)}
-
-## Composition Requirements
-- Use only the tables and columns listed in the schema section.
-- Do not invent any table names, column names, or PostGIS functions.
-- The SQL must satisfy the target difficulty level: {difficulty_level}.
-- Use table aliases for multi-table queries.
-- Use PostgreSQL/PostGIS syntax only.
-- Respect the exact PostGIS column types from the live database metadata. Geometry and geography are different types; do not assume they are interchangeable without an explicit cast.
-- Do not use raster or topology related functions.
-- Do not generate DDL, DML, transaction control, or administrative SQL.
-- Generate one SQL query only.
- - The query must return no more than 5 rows.
-   - If the query's semantics already guarantee a single-row result (for example: an aggregate such as COUNT/MAX, a query that selects by primary key or otherwise clearly filters to one row), do NOT add a LIMIT clause.
-   - Otherwise, to ensure the result set is bounded, include a trailing "LIMIT 5" clause on the generated SQL.
-- The SQL should be semantically plausible for the available tables and spatial columns.
-
-## Output Format
-Return a JSON object only, without Markdown code fences.
-The JSON object must contain:
-- sql
-- used_tables
-- used_columns
-- used_spatial_functions
-- reasoning_summary
-"""
-        return self._cleanup_rendered_prompt(prompt)
+        template_text = self._load_named_template_text("sql_synthesis")
+        return self._render_template(
+            template_text,
+            {
+                "database_id": self._stringify_value(getattr(database, "database_id", "")),
+                "city": self._stringify_value(getattr(database, "city", "")),
+                "selected_tables": ", ".join(getattr(database, "selected_table_names", []) or []),
+                "schema_block": chr(10).join(schema_lines) if schema_lines else "No schema available.",
+                "spatial_field_block": chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed.",
+                "representative_values_block": self._stable_json_text(representative_values),
+                "difficulty_level": self._stringify_value(difficulty_level),
+                "difficulty_constraint_block": self._stable_json_text(structural_constraints),
+                "required_function_block": self._stable_json_text(functions_payload),
+            },
+        )
 
     @staticmethod
     def _detect_geometry_columns(table: Any) -> set[str]:
@@ -194,30 +163,95 @@ The JSON object must contain:
                 names.add(value)
         return names
 
-    def _prepare_representative_values(
+    def _prepare_representative_rows(
         self,
-        representative_values: Dict[str, Any],
+        representative_values: Any,
         *,
         geometry_columns: set[str],
         limit: int,
-    ) -> Dict[str, Any]:
-        prepared: Dict[str, Any] = {}
-        for key, raw_value in representative_values.items():
+    ) -> List[Dict[str, Any]]:
+        normalized = representative_values
+        if isinstance(normalized, dict) and isinstance(normalized.get("rows"), list):
+            normalized = normalized.get("rows")
+
+        rows: List[Dict[str, Any]] = []
+        if isinstance(normalized, list):
+            for item in normalized:
+                if isinstance(item, dict):
+                    rows.append(dict(item))
+                else:
+                    rows.append({"value": item})
+        elif isinstance(normalized, dict):
+            if self._looks_column_oriented_samples(normalized):
+                rows = self._transpose_column_oriented_samples(normalized)
+            else:
+                rows = [dict(normalized)]
+
+        prepared: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            normalized_row: Dict[str, Any] = {}
+            for key, raw_value in row.items():
+                column_name = str(key).strip()
+                if not column_name:
+                    continue
+                normalized_row[column_name] = self._normalize_representative_value(
+                    column_name,
+                    raw_value,
+                    geometry_columns=geometry_columns,
+                )
+            signature = self._stable_json_text(normalized_row)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            prepared.append(normalized_row)
+            if len(prepared) >= limit:
+                break
+        return prepared
+
+    @staticmethod
+    def _looks_column_oriented_samples(values: Dict[str, Any]) -> bool:
+        if not values:
+            return False
+        if any(isinstance(item, dict) for item in values.values()):
+            return False
+        return any(isinstance(item, (list, tuple)) for item in values.values())
+
+    @staticmethod
+    def _transpose_column_oriented_samples(values: Dict[str, Any]) -> List[Dict[str, Any]]:
+        normalized_columns: Dict[str, List[Any]] = {}
+        max_len = 0
+        for key, raw_value in values.items():
             column_name = str(key).strip()
             if not column_name:
                 continue
-            is_geometry_column = column_name.lower() in geometry_columns
             if isinstance(raw_value, (list, tuple)):
-                samples = list(raw_value)[:limit]
-                if is_geometry_column:
-                    samples = [self._geometry_preview(item) for item in samples]
-                prepared[column_name] = samples
-                continue
-            if is_geometry_column:
-                prepared[column_name] = self._geometry_preview(raw_value)
+                items = list(raw_value)
             else:
-                prepared[column_name] = raw_value
-        return prepared
+                items = [raw_value]
+            normalized_columns[column_name] = items
+            max_len = max(max_len, len(items))
+
+        rows: List[Dict[str, Any]] = []
+        for index in range(max_len):
+            row: Dict[str, Any] = {}
+            for column_name, items in normalized_columns.items():
+                row[column_name] = items[index] if index < len(items) else None
+            rows.append(row)
+        return rows
+
+    def _normalize_representative_value(
+        self,
+        column_name: str,
+        value: Any,
+        *,
+        geometry_columns: set[str],
+    ) -> Any:
+        if column_name.lower() in geometry_columns:
+            if value in (None, ""):
+                return None
+            return self._geometry_preview(value)
+        return value
 
     @staticmethod
     def _geometry_preview(value: Any) -> str:
@@ -253,50 +287,24 @@ The JSON object must contain:
             database_runtime_metadata=database_runtime_metadata,
         )
 
-        prompt = f"""
-You must revise an existing PostgreSQL/PostGIS SQL query while preserving the original task goal.
-
-## Original Candidate
-{self._stable_json_text(original_candidate)}
-
-## Database Context
-- database_id: {getattr(database, 'database_id', '')}
-- city: {getattr(database, 'city', '')}
-
-## Schema
-{chr(10).join(schema_lines)}
-
-## Spatial Field Metadata
-{chr(10).join(spatial_lines) if spatial_lines else 'No spatial fields listed.'}
-
-## Representative Values
-{self._stable_json_text(representative_values)}
-
-## Difficulty Constraint
-Target difficulty level: {difficulty_level}
-{self._stable_json_text(structural_constraints)}
-
-## Original PostGIS Function Constraints
-{self._stable_json_text(sampled_functions)}
-
-## Validation Errors
-{self._stable_json_text(validation_errors)}
-
-## Execution Feedback
-- execution_error: {execution_error or 'none'}
-- empty_result: {str(bool(empty_result)).lower()}
-
-## Revision Requirements
-- Revise only the SQL and its directly related metadata.
-- Keep the same task goal and target difficulty level.
-- Still use only the provided schema tables and columns.
-- Still try to use the originally sampled PostGIS functions whenever compatible.
-- Avoid nonexistent columns, nonexistent tables, bad argument counts, type mismatches, SRID mismatches, and geometry/geography signature mismatches.
-- If the query returned no rows, relax overly narrow filters, replace brittle literal values, or adjust spatial thresholds.
-- Return one JSON object only, with fields: sql, used_tables, used_columns, used_spatial_functions, reasoning_summary.
-- Do not return Markdown code fences.
-"""
-        return self._cleanup_rendered_prompt(prompt)
+        template_text = self._load_named_template_text("sql_feedback")
+        return self._render_template(
+            template_text,
+            {
+                "original_candidate_block": self._stable_json_text(original_candidate),
+                "database_id": self._stringify_value(getattr(database, "database_id", "")),
+                "city": self._stringify_value(getattr(database, "city", "")),
+                "schema_block": chr(10).join(schema_lines) if schema_lines else "No schema available.",
+                "spatial_field_block": chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed.",
+                "representative_values_block": self._stable_json_text(representative_values),
+                "difficulty_level": self._stringify_value(difficulty_level),
+                "difficulty_constraint_block": self._stable_json_text(structural_constraints),
+                "required_function_block": self._stable_json_text(sampled_functions),
+                "validation_errors_block": self._stable_json_text(validation_errors),
+                "execution_error": execution_error or "none",
+                "empty_result": str(bool(empty_result)).lower(),
+            },
+        )
 
     def _build_sql_prompt_context(
         self,
@@ -323,8 +331,17 @@ Target difficulty level: {difficulty_level}
                 if table_name:
                     schema_lines.append(f"- {table_name}({', '.join(columns)})")
                 table_rep_values = table_meta.get("representative_values") or {}
+                geometry_columns = {
+                    str(field.get("column_name") or field.get("canonical_name") or "").strip().lower()
+                    for field in table_meta.get("spatial_fields", [])
+                    if isinstance(field, dict)
+                }
                 if table_name and table_rep_values:
-                    representative_values[table_name] = table_rep_values
+                    representative_values[table_name] = self._prepare_representative_rows(
+                        table_rep_values,
+                        geometry_columns=geometry_columns,
+                        limit=3,
+                    )
                 for field in table_meta.get("spatial_fields", []):
                     if not isinstance(field, dict):
                         continue
@@ -357,7 +374,7 @@ Target difficulty level: {difficulty_level}
             schema_lines.append(f"- {table_name}({', '.join(columns)})")
             table_rep_values = getattr(table, "representative_values", None) or {}
             if table_rep_values:
-                representative_values[table_name] = self._prepare_representative_values(
+                representative_values[table_name] = self._prepare_representative_rows(
                     table_rep_values,
                     geometry_columns=geometry_columns,
                     limit=3,
@@ -383,72 +400,23 @@ Target difficulty level: {difficulty_level}
         schema_lines = self._build_question_schema_lines(database_context)
         representative_values = self._build_question_representative_values(database_context)
         spatial_lines = self._build_question_spatial_lines(database_context)
-        prompt = f"""
-You are generating one natural-language question from an executable PostgreSQL/PostGIS SQL query.
-
-## Task Goal
-Rewrite the SQL into exactly one English question that is semantically equivalent to the SQL.
-The question must preserve the SQL meaning exactly while sounding natural and diverse.
-
-## SQL Query
-{self._stringify_value(getattr(sql_query, "sql", ""))}
-
-## Database Context
-- database_id: {self._stringify_value(database_context.get("database_id"))}
-- city: {self._stringify_value(database_context.get("city"))}
-- selected_tables: {", ".join(database_context.get("selected_table_names", []) or [])}
-
-## Schema
-{chr(10).join(schema_lines) if schema_lines else "No schema available."}
-
-## Spatial Field Metadata
-{chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed."}
-
-## Representative Values
-{self._stable_json_text(representative_values)}
-
-## SQL Feature Summary
-{self._stable_json_text(sql_features)}
-
-## Style Constraint
-{self._stable_json_text(style_constraint)}
-
-## Spatial Relation Constraint
-{self._stable_json_text(spatial_relation_constraints)}
-
-## Semantic Preservation Rules
-- Preserve the exact SQL semantics. Do not broaden or narrow the meaning.
-- Preserve table/entity roles, containment direction, ranking direction, grouping logic, aggregate semantics, filters, and limit semantics.
-- Preserve every explicit distance threshold, count threshold, date filter, comparison operator, and top-k value.
-- Rephrase spatial functions into natural language. Do not expose raw SQL or PostGIS function names.
-- Only describe relations supported by the SQL. Do not invent entities, columns, filters, joins, or assumptions.
-- If the SQL depends on geometry or geography columns, keep the wording consistent with the actual spatial meaning and do not confuse geometry with geography.
-- Do not mention SQL, PostGIS, databases, schemas, field names, aliases, CTE names, or implementation details.
-- Generate exactly one question, not a question set.
-
-## Output Format
-Return a JSON object with exactly these fields:
-- question
-- style
-- reasoning_summary
-- spatial_phrases
-
-Example shape:
-{{
-  "question": "Natural-language question here",
-  "style": "{self._stringify_value(style_constraint.get('style'))}",
-  "reasoning_summary": "One short sentence.",
-  "spatial_phrases": ["phrase 1"]
-}}
-
-Requirements:
-- question: one English question sentence or sentence-like utterance
-- style: must equal "{self._stringify_value(style_constraint.get('style'))}"
-- reasoning_summary: one short sentence summarizing how semantics were preserved
-- spatial_phrases: list of natural-language spatial phrases used in the question
-- Do not return Markdown code fences.
-""".strip()
-        return prompt
+        template_text = self._load_named_template_text("question_generation")
+        return self._render_template(
+            template_text,
+            {
+                "sql_query": self._stringify_value(getattr(sql_query, "sql", "")),
+                "database_id": self._stringify_value(database_context.get("database_id")),
+                "city": self._stringify_value(database_context.get("city")),
+                "selected_tables": ", ".join(database_context.get("selected_table_names", []) or []),
+                "schema_block": chr(10).join(schema_lines) if schema_lines else "No schema available.",
+                "spatial_field_block": chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed.",
+                "representative_values_block": self._stable_json_text(representative_values),
+                "sql_feature_block": self._stable_json_text(sql_features),
+                "style_constraint_block": self._stable_json_text(style_constraint),
+                "spatial_relation_block": self._stable_json_text(spatial_relation_constraints),
+                "style_name": self._stringify_value(style_constraint.get("style")),
+            },
+        )
 
     def build_question_feedback_prompt(
         self,
@@ -464,68 +432,48 @@ Requirements:
         schema_lines = self._build_question_schema_lines(database_context)
         representative_values = self._build_question_representative_values(database_context)
         spatial_lines = self._build_question_spatial_lines(database_context)
-        prompt = f"""
-You previously generated an invalid natural-language question from a PostgreSQL/PostGIS SQL query.
-Revise the question so that it is semantically equivalent to the SQL and satisfies all constraints below.
+        template_text = self._load_named_template_text("question_feedback")
+        return self._render_template(
+            template_text,
+            {
+                "sql_query": self._stringify_value(getattr(sql_query, "sql", "")),
+                "original_candidate_block": self._stable_json_text(original_candidate),
+                "validation_errors_block": self._stable_json_text(validation_errors),
+                "database_id": self._stringify_value(database_context.get("database_id")),
+                "city": self._stringify_value(database_context.get("city")),
+                "selected_tables": ", ".join(database_context.get("selected_table_names", []) or []),
+                "schema_block": chr(10).join(schema_lines) if schema_lines else "No schema available.",
+                "spatial_field_block": chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed.",
+                "representative_values_block": self._stable_json_text(representative_values),
+                "sql_feature_block": self._stable_json_text(sql_features),
+                "style_constraint_block": self._stable_json_text(style_constraint),
+                "spatial_relation_block": self._stable_json_text(spatial_relation_constraints),
+                "style_name": self._stringify_value(style_constraint.get("style")),
+            },
+        )
 
-## SQL Query
-{self._stringify_value(getattr(sql_query, "sql", ""))}
-
-## Original Candidate
-{self._stable_json_text(original_candidate)}
-
-## Validation Errors
-{self._stable_json_text(validation_errors)}
-
-## Database Context
-- database_id: {self._stringify_value(database_context.get("database_id"))}
-- city: {self._stringify_value(database_context.get("city"))}
-- selected_tables: {", ".join(database_context.get("selected_table_names", []) or [])}
-
-## Schema
-{chr(10).join(schema_lines) if schema_lines else "No schema available."}
-
-## Spatial Field Metadata
-{chr(10).join(spatial_lines) if spatial_lines else "No spatial fields listed."}
-
-## Representative Values
-{self._stable_json_text(representative_values)}
-
-## SQL Feature Summary
-{self._stable_json_text(sql_features)}
-
-## Style Constraint
-{self._stable_json_text(style_constraint)}
-
-## Spatial Relation Constraint
-{self._stable_json_text(spatial_relation_constraints)}
-
-## Revision Requirements
-- Keep the same task goal and the same SQL semantics.
-- Preserve containment direction, threshold values, ranking direction, aggregate meaning, grouping, and filters exactly.
-- Still avoid raw SQL and raw PostGIS function names.
-- Still produce exactly one English question.
-- Still use the requested style.
-- Fix every validation error listed above.
-
-## Output Format
-Return a JSON object with exactly these fields:
-- question
-- style
-- reasoning_summary
-- spatial_phrases
-
-Example shape:
-{{
-  "question": "Natural-language question here",
-  "style": "{self._stringify_value(style_constraint.get('style'))}",
-  "reasoning_summary": "One short sentence.",
-  "spatial_phrases": ["phrase 1"]
-}}
-
-Do not return Markdown code fences.
-""".strip()
-        return prompt
+    def build_quality_control_prompt(
+        self,
+        *,
+        sample: Dict[str, Any],
+        schema_lines: List[str],
+        sql_feature_summary: Dict[str, Any],
+        execution_summary: Dict[str, Any],
+        representative_values: Dict[str, Any],
+        judge_rules: Dict[str, Any],
+    ) -> str:
+        template_text = self._load_named_template_text("quality_control")
+        return self._render_template(
+            template_text,
+            {
+                "sample_block": self._stable_json_text(sample),
+                "schema_block": chr(10).join(schema_lines) if schema_lines else "No schema available.",
+                "sql_feature_block": self._stable_json_text(sql_feature_summary),
+                "execution_summary_block": self._stable_json_text(execution_summary),
+                "representative_values_block": self._stable_json_text(representative_values),
+                "judge_rules_block": self._stable_json_text(judge_rules),
+            },
+        )
 
     @staticmethod
     def _build_question_schema_lines(database_context: Dict[str, Any]) -> List[str]:
@@ -546,11 +494,43 @@ Do not return Markdown code fences.
                 schema_lines.append(f"- {table_name}({', '.join(columns)})")
         return schema_lines
 
-    @staticmethod
-    def _build_question_representative_values(database_context: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_question_representative_values(self, database_context: Dict[str, Any]) -> Dict[str, Any]:
+        representative_values: Dict[str, Any] = {}
+        geometry_columns_by_table: Dict[str, set[str]] = {}
+
+        for table_item in database_context.get("table_contexts", []) or []:
+            if not isinstance(table_item, dict):
+                continue
+            table_name = str(table_item.get("table_name") or "").strip()
+            if not table_name:
+                continue
+            geometry_columns_by_table[table_name] = {
+                str(field.get("canonical_name") or field.get("column_name") or "").strip().lower()
+                for field in table_item.get("spatial_fields", []) or []
+                if isinstance(field, dict)
+            }
+            table_values = table_item.get("representative_values")
+            if table_values:
+                representative_values[table_name] = self._prepare_representative_rows(
+                    table_values,
+                    geometry_columns=geometry_columns_by_table[table_name],
+                    limit=3,
+                )
+
+        if representative_values:
+            return representative_values
+
         values = database_context.get("representative_values")
         if isinstance(values, dict):
-            return values
+            normalized: Dict[str, Any] = {}
+            for table_name, table_values in values.items():
+                geometry_columns = geometry_columns_by_table.get(str(table_name).strip(), set())
+                normalized[str(table_name)] = self._prepare_representative_rows(
+                    table_values,
+                    geometry_columns=geometry_columns,
+                    limit=3,
+                )
+            return normalized
         return {}
 
     @staticmethod
@@ -633,6 +613,13 @@ Do not return Markdown code fences.
             path = self.template_path
 
         cache_key = f"{prompt_style}:{path}"
+        if cache_key not in self._template_cache:
+            self._template_cache[cache_key] = path.read_text(encoding="utf-8")
+        return self._template_cache[cache_key]
+
+    def _load_named_template_text(self, template_name: str) -> str:
+        path = self.named_prompt_templates[template_name]
+        cache_key = f"named:{template_name}:{path}"
         if cache_key not in self._template_cache:
             self._template_cache[cache_key] = path.read_text(encoding="utf-8")
         return self._template_cache[cache_key]

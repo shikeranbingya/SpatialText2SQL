@@ -1,0 +1,59 @@
+You previously generated an invalid natural-language question from a PostgreSQL/PostGIS SQL query.
+Revise the question so that it is semantically equivalent to the SQL and satisfies all constraints below.
+
+## SQL Query
+{{sql_query}}
+
+## Original Candidate
+{{original_candidate_block}}
+
+## Validation Errors
+{{validation_errors_block}}
+
+## Database Context
+- database_id: {{database_id}}
+- city: {{city}}
+- selected_tables: {{selected_tables}}
+
+## Schema
+{{schema_block}}
+
+## Spatial Field Metadata
+{{spatial_field_block}}
+
+## Representative Values
+{{representative_values_block}}
+
+## SQL Feature Summary
+{{sql_feature_block}}
+
+## Style Constraint
+{{style_constraint_block}}
+
+## Spatial Relation Constraint
+{{spatial_relation_block}}
+
+## Revision Requirements
+- Keep the same task goal and the same SQL semantics.
+- Preserve containment direction, threshold values, ranking direction, aggregate meaning, grouping, and filters exactly.
+- Still avoid raw SQL and raw PostGIS function names.
+- Still produce exactly one English question.
+- Still use the requested style.
+- Fix every validation error listed above.
+
+## Output Format
+Return a JSON object with exactly these fields:
+- question
+- style
+- reasoning_summary
+- spatial_phrases
+
+Example shape:
+{
+  "question": "Natural-language question here",
+  "style": "{{style_name}}",
+  "reasoning_summary": "One short sentence.",
+  "spatial_phrases": ["phrase 1"]
+}
+
+Do not return Markdown code fences.

@@ -1,0 +1,63 @@
+You are generating one natural-language question from an executable PostgreSQL/PostGIS SQL query.
+
+## Task Goal
+Rewrite the SQL into exactly one English question that is semantically equivalent to the SQL.
+The question must preserve the SQL meaning exactly while sounding natural and diverse.
+
+## SQL Query
+{{sql_query}}
+
+## Database Context
+- database_id: {{database_id}}
+- city: {{city}}
+- selected_tables: {{selected_tables}}
+
+## Schema
+{{schema_block}}
+
+## Spatial Field Metadata
+{{spatial_field_block}}
+
+## Representative Values
+{{representative_values_block}}
+
+## SQL Feature Summary
+{{sql_feature_block}}
+
+## Style Constraint
+{{style_constraint_block}}
+
+## Spatial Relation Constraint
+{{spatial_relation_block}}
+
+## Semantic Preservation Rules
+- Preserve the exact SQL semantics. Do not broaden or narrow the meaning.
+- Preserve table/entity roles, containment direction, ranking direction, grouping logic, aggregate semantics, filters, and limit semantics.
+- Preserve every explicit distance threshold, count threshold, date filter, comparison operator, and top-k value.
+- Rephrase spatial functions into natural language. Do not expose raw SQL or PostGIS function names.
+- Only describe relations supported by the SQL. Do not invent entities, columns, filters, joins, or assumptions.
+- If the SQL depends on geometry or geography columns, keep the wording consistent with the actual spatial meaning and do not confuse geometry with geography.
+- Do not mention SQL, PostGIS, databases, schemas, field names, aliases, CTE names, or implementation details.
+- Generate exactly one question, not a question set.
+
+## Output Format
+Return a JSON object with exactly these fields:
+- question
+- style
+- reasoning_summary
+- spatial_phrases
+
+Example shape:
+{
+  "question": "Natural-language question here",
+  "style": "{{style_name}}",
+  "reasoning_summary": "One short sentence.",
+  "spatial_phrases": ["phrase 1"]
+}
+
+Requirements:
+- question: one English question sentence or sentence-like utterance
+- style: must equal "{{style_name}}"
+- reasoning_summary: one short sentence summarizing how semantics were preserved
+- spatial_phrases: list of natural-language spatial phrases used in the question
+- Do not return Markdown code fences.

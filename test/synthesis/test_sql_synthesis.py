@@ -298,8 +298,14 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         representative_section = prompt.split("## Representative Values", 1)[1].split("## Difficulty Constraint", 1)[0].strip()
         representative_values = json.loads(representative_section)
-        self.assertEqual(representative_values["table_1"]["name"], ["a", "b", "c"])
-        self.assertEqual(representative_values["table_1"]["geometry"], ["POINT", "POLYGON", "LINESTRING"])
+        self.assertEqual(
+            representative_values["table_1"],
+            [
+                {"geometry": "POINT", "name": "a"},
+                {"geometry": "POLYGON", "name": "b"},
+                {"geometry": "LINESTRING", "name": "c"},
+            ],
+        )
 
     def test_ollama_generator_uses_openai_style_client(self):
         generator = OllamaSQLGenerator(
@@ -454,6 +460,7 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertIn("table_1(id integer, name text, shape geography(Point,4326))", prompt)
         self.assertIn("family=geography", prompt)
         self.assertIn('"hydrant"', prompt)
+        self.assertIn('"shape": "POINT"', prompt)
         self.assertIn("Geometry and geography are different types", prompt)
         self.assertNotIn("geom spatial", prompt)
 
@@ -513,7 +520,7 @@ class SQLSynthesisTests(unittest.TestCase):
         )
         self.assertIn("footprint geometry(MultiPolygon,3857)", prompt)
         self.assertIn("geometry_type=MULTIPOLYGON", prompt)
-        self.assertIn('"id": [', prompt)
+        self.assertIn('"id": 1', prompt)
         self.assertIn("geometry/geography signature mismatches", prompt)
 
     def test_response_parser_supports_json_and_markdown_json(self):

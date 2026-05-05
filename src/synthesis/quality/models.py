@@ -70,7 +70,7 @@ class ColumnSchema:
 class TableSchema:
     table_name: str
     columns: dict[str, ColumnSchema] = field(default_factory=dict)
-    representative_values: dict[str, Any] = field(default_factory=dict)
+    representative_values: Any = field(default_factory=dict)
 
     @classmethod
     def from_payload(
@@ -78,7 +78,7 @@ class TableSchema:
         table_name: str,
         *,
         columns: Sequence[Mapping[str, Any]],
-        representative_values: Mapping[str, Any] | None = None,
+        representative_values: Any = None,
     ) -> "TableSchema":
         return cls(
             table_name=table_name,
@@ -87,7 +87,7 @@ class TableSchema:
                 for column in (ColumnSchema.from_dict(item) for item in columns if isinstance(item, Mapping))
                 if column.column_name
             },
-            representative_values=_as_mapping(representative_values),
+            representative_values=stable_jsonify(representative_values),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -116,6 +116,7 @@ class NLSQLSample:
     database_id: str
     question: str
     sql: str
+    sql_id: str = ""
     difficulty_level: str = ""
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
@@ -159,6 +160,7 @@ class NLSQLSample:
                 metadata[str(key)] = stable_jsonify(value)
         return cls(
             sample_id=sample_id,
+            sql_id=to_text(payload.get("sql_id")) or sample_id,
             database_id=database_id,
             question=question,
             sql=sql,
@@ -173,6 +175,7 @@ class NLSQLSample:
     def to_dict(self) -> dict[str, Any]:
         return {
             "sample_id": self.sample_id,
+            "sql_id": self.sql_id,
             "database_id": self.database_id,
             "question": self.question,
             "sql": self.sql,
@@ -193,6 +196,7 @@ class ValidationResult:
     execution_status: str = "not_run"
     row_count: int = 0
     result_preview: list[dict[str, Any]] = field(default_factory=list)
+    self_consistency: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -202,6 +206,7 @@ class ValidationResult:
             "execution_status": self.execution_status,
             "row_count": self.row_count,
             "result_preview": stable_jsonify(self.result_preview),
+            "self_consistency": stable_jsonify(self.self_consistency),
         }
 
 
@@ -249,4 +254,3 @@ class ParsedSQL:
     string_literals: list[str] = field(default_factory=list)
     comparison_operators: list[str] = field(default_factory=list)
     function_calls: dict[str, list[str]] = field(default_factory=dict)
-

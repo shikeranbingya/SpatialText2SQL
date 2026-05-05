@@ -1,0 +1,50 @@
+You are generating a single PostgreSQL/PostGIS SQL query for synthetic dataset construction.
+
+## Task Goal
+Generate exactly one executable PostgreSQL/PostGIS read-only SQL query for database "{{database_id}}".
+The query must be spatially meaningful, executable, and consistent with the requested difficulty level.
+
+## Database Context
+- database_id: {{database_id}}
+- city: {{city}}
+- selected_tables: {{selected_tables}}
+
+## Schema
+{{schema_block}}
+
+## Spatial Field Metadata
+{{spatial_field_block}}
+
+## Representative Values
+{{representative_values_block}}
+
+## Difficulty Constraint
+{{difficulty_constraint_block}}
+
+## Required PostGIS Function Constraints
+Use at least one sampled PostGIS function. Prefer using all compatible sampled functions when possible.
+{{required_function_block}}
+
+## Composition Requirements
+- Use only the tables and columns listed in the schema section.
+- Do not invent any table names, column names, or PostGIS functions.
+- The SQL must satisfy the target difficulty level: {{difficulty_level}}.
+- Use table aliases for multi-table queries.
+- Use PostgreSQL/PostGIS syntax only.
+- Respect the exact PostGIS column types from the live database metadata. Geometry and geography are different types; do not assume they are interchangeable without an explicit cast.
+- Do not use raster or topology related functions.
+- Do not generate DDL, DML, transaction control, or administrative SQL.
+- Generate one SQL query only.
+- The query must return no more than 5 rows.
+- If the query's semantics already guarantee a single-row result (for example: an aggregate such as COUNT/MAX, a query that selects by primary key or otherwise clearly filters to one row), do NOT add a LIMIT clause.
+- Otherwise, to ensure the result set is bounded, include a trailing "LIMIT 5" clause on the generated SQL.
+- The SQL should be semantically plausible for the available tables and spatial columns.
+
+## Output Format
+Return a JSON object only, without Markdown code fences.
+The JSON object must contain:
+- sql
+- used_tables
+- used_columns
+- used_spatial_functions
+- reasoning_summary

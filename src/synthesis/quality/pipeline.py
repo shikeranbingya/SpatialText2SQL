@@ -11,11 +11,11 @@ from src.synthesis.sql.function_library import PostGISFunctionLibrary
 from .balancing import DiversityBalancer
 from .config import QualityControlConfig
 from .duplicates import DuplicateDetector
+from .judge import SelfConsistencyQualityJudge
 from .models import NLSQLSample, QualityControlReport
 from .registry import DatabaseRegistry, SchemaRegistry
 from .validation import (
     SQLSampleValidator,
-    SemanticConsistencyChecker,
     build_distribution,
 )
 
@@ -25,8 +25,8 @@ LOGGER = logging.getLogger(__name__)
 @dataclass
 class QualityControlPipeline:
     function_library: PostGISFunctionLibrary
+    self_consistency_judge: SelfConsistencyQualityJudge | None = None
     sql_validator: SQLSampleValidator = field(init=False)
-    semantic_checker: SemanticConsistencyChecker = field(default_factory=SemanticConsistencyChecker)
 
     def __post_init__(self) -> None:
         self.sql_validator = SQLSampleValidator(self.function_library)
@@ -79,18 +79,27 @@ class QualityControlPipeline:
             )
             for error in artifact.validation_result.errors:
                 failure_reasons[error] += 1
-            if artifact.validation_result.passed:
-                semantic_errors, semantic_warnings = self.semantic_checker.check(
+            if artifact.validation_result.passed and self.self_consistency_judge is not None:
+                judgment = self.self_consistency_judge.judge(
                     sample=sample,
-                    parsed_sql=artifact.parsed_sql,
                     schema=schema,
+                    parsed_sql=artifact.parsed_sql,
+                    validation_result=artifact.validation_result,
                     config=config,
                 )
-                artifact.validation_result.errors.extend(semantic_errors)
-                artifact.validation_result.warnings.extend(semantic_warnings)
-                artifact.validation_result.passed = not artifact.validation_result.errors
-                for error in semantic_errors:
-                    failure_reasons[error] += 1
+                artifact.validation_result.self_consistency = judgment.to_dict()
+                artifact.validation_result.warnings.extend(judgment.warnings)
+                if not judgment.passed:
+                    artifact.validation_result.errors.append(
+                        "Self-consistency judge rejected the NL-SQL pair."
+                    )
+                    artifact.validation_result.errors.extend(
+                        [f"judge:{code}" for code in judgment.reason_codes]
+                    )
+                    artifact.validation_result.passed = False
+                    failure_reasons["self_consistency_rejected"] += 1
+                    for code in judgment.reason_codes:
+                        failure_reasons[f"judge:{code}"] += 1
 
             if not artifact.validation_result.passed:
                 LOGGER.warning(
@@ -125,4 +134,3 @@ class QualityControlPipeline:
             distribution_by_linguistic_style=build_distribution(balanced_samples, lambda sample: [sample.linguistic_style]),
         )
         return balanced_samples, report
-

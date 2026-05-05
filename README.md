@@ -240,6 +240,7 @@ Default settings:
 - `difficulty_weights` now control how many SQL samples are allocated to each difficulty bucket, and generation runs in fixed order: `easy -> medium -> hard -> extra-hard`
 - When compatible candidates exist, SQL synthesis samples PostGIS functions from `ST_Function.md` first, then falls back to other extracted PostGIS functions
 - SQL synthesis prompts now read `Schema`, `Spatial Field Metadata`, and `Representative Values` from the live synthesized PostGIS schema instead of file-side metadata, so prompt context matches the executable database exactly
+- SQL synthesis prompt templates live in `prompts/sql_synthesis_prompt.txt` and `prompts/sql_feedback_prompt.txt`
 - The default config only enables `nyc: 8`; cities not listed will not emit SQL unless you add them or provide a `default` entry
 
 Edit persistent settings in `config/sql_synthesis.yaml`.
@@ -275,6 +276,7 @@ Default settings:
 - Default number of questions per SQL: `1`
 - Default random seed: `42`
 - The question-generation prompt preserves SQL semantics exactly and rewrites spatial relations into natural language without exposing raw PostGIS function names
+- Question-generation prompt templates live in `prompts/question_generation_prompt.txt` and `prompts/question_feedback_prompt.txt`
 
 Edit persistent settings in `config/question_generation.yaml`.
 
@@ -287,6 +289,7 @@ scripts/dataset_construction/quality_control.sh
 ```
 
 The quality-control stage validates read-only SQL safety, schema references, live PostGIS execution, lightweight NL-SQL semantic consistency, duplicate removal, and optional diversity balancing.
+It is rule-based and does not rely on an LLM prompt.
 
 Typical usage:
 

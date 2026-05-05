@@ -1,0 +1,41 @@
+You must revise an existing PostgreSQL/PostGIS SQL query while preserving the original task goal.
+
+## Original Candidate
+{{original_candidate_block}}
+
+## Database Context
+- database_id: {{database_id}}
+- city: {{city}}
+
+## Schema
+{{schema_block}}
+
+## Spatial Field Metadata
+{{spatial_field_block}}
+
+## Representative Values
+{{representative_values_block}}
+
+## Difficulty Constraint
+Target difficulty level: {{difficulty_level}}
+{{difficulty_constraint_block}}
+
+## Original PostGIS Function Constraints
+{{required_function_block}}
+
+## Validation Errors
+{{validation_errors_block}}
+
+## Execution Feedback
+- execution_error: {{execution_error}}
+- empty_result: {{empty_result}}
+
+## Revision Requirements
+- Revise only the SQL and its directly related metadata.
+- Keep the same task goal and target difficulty level.
+- Still use only the provided schema tables and columns.
+- Still try to use the originally sampled PostGIS functions whenever compatible.
+- Avoid nonexistent columns, nonexistent tables, bad argument counts, type mismatches, SRID mismatches, and geometry/geography signature mismatches.
+- If the query returned no rows, relax overly narrow filters, replace brittle literal values, or adjust spatial thresholds.
+- Return one JSON object only, with fields: sql, used_tables, used_columns, used_spatial_functions, reasoning_summary.
+- Do not return Markdown code fences.

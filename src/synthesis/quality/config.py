@@ -38,9 +38,24 @@ class QualityControlFunctionConfig:
 
 
 @dataclass(frozen=True)
-class SemanticCheckConfig:
-    mode: str = "strict"
-    debug_mode: bool = False
+class QualityControlLLMConfig:
+    provider: str = "ollama"
+    model: str = "qwen2.5:7b"
+    base_url: str = "http://localhost:11434/v1"
+    api_key_env: str = "OPENAI_API_KEY"
+    temperature: float = 0.2
+    max_tokens: int = 80
+    timeout: int = 60
+    max_retries: int = 1
+
+
+@dataclass(frozen=True)
+class SelfConsistencyJudgeConfig:
+    prompt_template_path: str = str(_project_root() / "prompts" / "quality_control_prompt.txt")
+    self_consistency_rounds: int = 3
+    min_pass_votes: int = 2
+    max_reason_codes: int = 2
+    require_high_confidence: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,7 @@ class DiversityBalancingConfig:
 @dataclass(frozen=True)
 class QualityControlRunConfig:
     input_path: str = str(_project_root() / "data" / "processed" / "diversity_aware_questions.jsonl")
+    sql_context_path: str = str(_project_root() / "data" / "processed" / "synthesized_sql_queries.jsonl")
     schema_context_path: str = str(_project_root() / "data" / "processed" / "synthesized_spatial_databases.jsonl")
     output_path: str = str(_project_root() / "data" / "processed" / "quality_controlled_nl_sql.jsonl")
     report_path: str = str(_project_root() / "data" / "processed" / "quality_control_report.json")
@@ -88,8 +104,9 @@ class QualityControlLoggingConfig:
 class QualityControlConfig:
     database: QualityControlDatabaseConfig = field(default_factory=QualityControlDatabaseConfig)
     functions: QualityControlFunctionConfig = field(default_factory=QualityControlFunctionConfig)
+    llm: QualityControlLLMConfig = field(default_factory=QualityControlLLMConfig)
+    judge: SelfConsistencyJudgeConfig = field(default_factory=SelfConsistencyJudgeConfig)
     run: QualityControlRunConfig = field(default_factory=QualityControlRunConfig)
-    semantic: SemanticCheckConfig = field(default_factory=SemanticCheckConfig)
     duplicates: DuplicateDetectionConfig = field(default_factory=DuplicateDetectionConfig)
     balancing: DiversityBalancingConfig = field(default_factory=DiversityBalancingConfig)
     logging: QualityControlLoggingConfig = field(default_factory=QualityControlLoggingConfig)
@@ -143,13 +160,6 @@ def _as_float(value: Any, default: float, *, minimum: float | None = None, maxim
     return parsed
 
 
-def _normalize_mode(value: Any) -> str:
-    mode = _as_text(value, "strict").lower()
-    if mode not in {"strict", "warning_only"}:
-        raise ValueError(f"Unsupported semantic mode: {value!r}")
-    return mode
-
-
 def _normalize_distribution(value: Any) -> dict[str, float]:
     if value in (None, ""):
         return {}
@@ -195,15 +205,17 @@ def _build_quality_control_config_from_payload(
 
     db_section = payload.get("database") or {}
     function_section = payload.get("functions") or {}
+    llm_section = payload.get("llm") or {}
+    judge_section = payload.get("judge") or {}
     run_section = payload.get("run") or {}
-    semantic_section = payload.get("semantic") or {}
     duplicate_section = payload.get("duplicates") or {}
     balancing_section = payload.get("balancing") or {}
     logging_section = payload.get("logging") or {}
     default_db = QualityControlDatabaseConfig()
     default_function = QualityControlFunctionConfig()
+    default_llm = QualityControlLLMConfig()
+    default_judge = SelfConsistencyJudgeConfig()
     default_run = QualityControlRunConfig()
-    default_semantic = SemanticCheckConfig()
     default_duplicate = DuplicateDetectionConfig()
     default_balancing = DiversityBalancingConfig()
     default_logging = QualityControlLoggingConfig()
@@ -232,8 +244,49 @@ def _build_quality_control_config_from_payload(
             ),
             exclude_categories=[to_text(item).lower() for item in function_section.get("exclude_categories", default_function.exclude_categories)],
         ),
+        llm=QualityControlLLMConfig(
+            provider=_as_text(llm_section.get("provider"), default_llm.provider),
+            model=_as_text(llm_section.get("model"), default_llm.model),
+            base_url=_as_text(llm_section.get("base_url"), default_llm.base_url),
+            api_key_env=_as_text(llm_section.get("api_key_env"), default_llm.api_key_env),
+            temperature=_as_float(llm_section.get("temperature"), default_llm.temperature),
+            max_tokens=_as_int(llm_section.get("max_tokens"), default_llm.max_tokens, minimum=1),
+            timeout=_as_int(llm_section.get("timeout"), default_llm.timeout, minimum=1),
+            max_retries=_as_int(llm_section.get("max_retries"), default_llm.max_retries, minimum=0),
+        ),
+        judge=SelfConsistencyJudgeConfig(
+            prompt_template_path=_resolve_path(
+                judge_section.get("prompt_template_path"),
+                path,
+                default_judge.prompt_template_path,
+            ),
+            self_consistency_rounds=_as_int(
+                judge_section.get("self_consistency_rounds"),
+                default_judge.self_consistency_rounds,
+                minimum=1,
+            ),
+            min_pass_votes=_as_int(
+                judge_section.get("min_pass_votes"),
+                default_judge.min_pass_votes,
+                minimum=1,
+            ),
+            max_reason_codes=_as_int(
+                judge_section.get("max_reason_codes"),
+                default_judge.max_reason_codes,
+                minimum=1,
+            ),
+            require_high_confidence=_as_bool(
+                judge_section.get("require_high_confidence"),
+                default_judge.require_high_confidence,
+            ),
+        ),
         run=QualityControlRunConfig(
             input_path=_resolve_path(run_section.get("input_path"), path, default_run.input_path),
+            sql_context_path=_resolve_path(
+                run_section.get("sql_context_path"),
+                path,
+                default_run.sql_context_path,
+            ),
             schema_context_path=_resolve_path(
                 run_section.get("schema_context_path"),
                 path,
@@ -244,10 +297,6 @@ def _build_quality_control_config_from_payload(
             allow_empty_result=_as_bool(run_section.get("allow_empty_result"), default_run.allow_empty_result),
             max_result_rows=_as_int(run_section.get("max_result_rows"), default_run.max_result_rows, minimum=1),
             prefer_live_schema=_as_bool(run_section.get("prefer_live_schema"), default_run.prefer_live_schema),
-        ),
-        semantic=SemanticCheckConfig(
-            mode=_normalize_mode(semantic_section.get("mode") or default_semantic.mode),
-            debug_mode=_as_bool(semantic_section.get("debug_mode"), default_semantic.debug_mode),
         ),
         duplicates=DuplicateDetectionConfig(
             remove_exact_sql_duplicates=_as_bool(
@@ -308,8 +357,9 @@ def override_quality_control_config(
     *,
     database: Mapping[str, Any] | None = None,
     functions: Mapping[str, Any] | None = None,
+    llm: Mapping[str, Any] | None = None,
+    judge: Mapping[str, Any] | None = None,
     run: Mapping[str, Any] | None = None,
-    semantic: Mapping[str, Any] | None = None,
     duplicates: Mapping[str, Any] | None = None,
     balancing: Mapping[str, Any] | None = None,
     logging: Mapping[str, Any] | None = None,
@@ -317,8 +367,9 @@ def override_quality_control_config(
     merged = {
         "database": {**base.database.__dict__, **dict(database or {})},
         "functions": {**base.functions.__dict__, **dict(functions or {})},
+        "llm": {**base.llm.__dict__, **dict(llm or {})},
+        "judge": {**base.judge.__dict__, **dict(judge or {})},
         "run": {**base.run.__dict__, **dict(run or {})},
-        "semantic": {**base.semantic.__dict__, **dict(semantic or {})},
         "duplicates": {**base.duplicates.__dict__, **dict(duplicates or {})},
         "balancing": {
             "enabled": base.balancing.enabled,
@@ -333,4 +384,3 @@ def override_quality_control_config(
         stable_jsonify(merged),
         DEFAULT_QUALITY_CONTROL_CONFIG_PATH,
     )
-
