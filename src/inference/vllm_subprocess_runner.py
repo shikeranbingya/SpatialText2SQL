@@ -12,6 +12,9 @@ import json
 import sys
 from typing import Any, Dict, Optional
 
+import httpx
+from openai import OpenAI
+
 
 def _content_to_text(content: Any) -> str:
     if isinstance(content, str):
@@ -76,16 +79,6 @@ def _extract_message_parts(response) -> Dict[str, Any]:
 
 def run_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """执行一次请求，返回 ``{"ok": bool, "content"?: str, "reasoning"?: str, "err"?: str}``。"""
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        return {"ok": False, "err": f"openai import failed: {exc}", "err_type": "ImportError"}
-
-    try:
-        import httpx
-    except ImportError:
-        httpx = None
-
     api_base = payload["api_base"].rstrip("/")
     api_key = payload["api_key"]
     overall = float(payload["timeout"])
@@ -94,15 +87,12 @@ def run_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_t = float(payload["write_timeout"])
     request_kwargs = payload["request_kwargs"]
 
-    if httpx is None:
-        timeout = overall
-    else:
-        timeout = httpx.Timeout(
-            timeout=overall,
-            connect=connect,
-            read=read_t,
-            write=write_t,
-        )
+    timeout = httpx.Timeout(
+        timeout=overall,
+        connect=connect,
+        read=read_t,
+        write=write_t,
+    )
 
     try:
         client = OpenAI(

@@ -3,55 +3,23 @@ from __future__ import annotations
 import os
 import sqlite3
 from abc import ABC, abstractmethod
-from typing import Any, Iterable, Literal, Optional
+from typing import Iterable, Literal, Optional
 
-try:
-    import fiona
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    fiona = None
-
-try:
-    import geopandas as gpd
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    gpd = None
-
-try:
-    from sqlalchemy import create_engine
-    from sqlalchemy.engine import Engine
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    create_engine = None
-    Engine = Any
+import chardet
+import fiona
+import geopandas as gpd
+from osgeo import gdal
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from tqdm import tqdm
 
 from .logging_config import spatial_logger as logger
-
-try:
-    import chardet
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    chardet = None
-
-try:
-    from osgeo import gdal
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    gdal = None
-
-try:
-    from tqdm import tqdm
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    tqdm = None
 
 
 IfExistsMode = Literal["fail", "replace", "append"]
 
-if gdal is not None:
-    gdal.SetConfigOption("SHAPE_RESTORE_SHX", "YES")
-    gdal.SetConfigOption("SHAPE_ENCODING", "")
-
-
-def _require_dependency(name: str, module: Any) -> None:
-    if module is None:
-        raise RuntimeError(
-            f"Missing dependency: {name}. Please install the GIS import extras first."
-        )
+gdal.SetConfigOption("SHAPE_RESTORE_SHX", "YES")
+gdal.SetConfigOption("SHAPE_ENCODING", "")
 
 
 class SpatialDBImporter(ABC):
@@ -82,7 +50,6 @@ class PostGISImporter(SpatialDBImporter):
         if_exists: IfExistsMode = "replace",
     ) -> None:
         try:
-            _require_dependency("sqlalchemy", create_engine)
             engine: Engine = create_engine(self.db_url)
             gdf.to_postgis(
                 name=table_name,
@@ -109,8 +76,6 @@ class SpatiaLiteImporter(SpatialDBImporter):
         if_exists: IfExistsMode = "replace",
     ) -> None:
         del schema  # SpatiaLite does not use PostgreSQL schemas.
-
-        _require_dependency("fiona", fiona)
         db_path = self.db_url.split(":///")[-1]
         existing_layers: list[str] = []
         if os.path.exists(db_path):
@@ -186,9 +151,6 @@ def get_importer(db_url: str) -> SpatialDBImporter:
 def detect_shp_encoding(shp_path: str) -> str:
     """Best-effort DBF encoding detection for shapefiles."""
 
-    if chardet is None:
-        return "utf-8"
-
     dbf_path = os.path.splitext(shp_path)[0] + ".dbf"
     if not os.path.exists(dbf_path):
         return "utf-8"
@@ -207,9 +169,6 @@ def read_shp_with_fallback_encoding(
     layer_name: Optional[str] = None,
 ) -> gpd.GeoDataFrame:
     """Read a shapefile with multiple encoding fallbacks."""
-
-    _require_dependency("geopandas", gpd)
-    _require_dependency("fiona", fiona)
 
     detected_encoding = detect_shp_encoding(shp_path)
     candidate_encodings = [
@@ -312,9 +271,6 @@ def iter_with_progress(
     unit: str,
 ) -> Iterable[str]:
     """Wrap an iterable with tqdm when available."""
-
-    if tqdm is None:
-        return items
     return tqdm(list(items), desc=desc, unit=unit)
 
 
@@ -325,8 +281,6 @@ def _process_and_import(
     schema: Optional[str],
     if_exists: IfExistsMode,
 ) -> None:
-    _require_dependency("fiona", fiona)
-
     try:
         layers = fiona.listlayers(shp_path)
     except Exception:

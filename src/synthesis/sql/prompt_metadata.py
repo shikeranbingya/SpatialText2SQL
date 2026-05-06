@@ -9,14 +9,9 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
-try:
-    import psycopg2
-    from psycopg2 import sql as pg_sql
-    from psycopg2.extras import RealDictCursor
-except ImportError:  # pragma: no cover
-    psycopg2 = None
-    pg_sql = None
-    RealDictCursor = None
+import psycopg2
+from psycopg2 import sql as pg_sql
+from psycopg2.extras import RealDictCursor
 
 from src.synthesis.database.migration import normalize_postgres_identifier
 from src.synthesis.database.models import SynthesizedSpatialDatabase
@@ -57,10 +52,6 @@ class PostGISPromptMetadataProvider:
         cache_key = f"{database.database_id}|{'|'.join(requested_tables)}"
         if cache_key in self._cache:
             return stable_jsonify(self._cache[cache_key])
-        if psycopg2 is None or pg_sql is None or RealDictCursor is None:
-            LOGGER.warning("Prompt metadata provider unavailable because psycopg2 is not installed.")
-            self._cache[cache_key] = None
-            return None
 
         schema_name = normalize_postgres_identifier(database.database_id, prefix="schema")
         catalog_name = normalize_postgres_identifier(self.db_config.database, prefix="catalog") or self.db_config.database

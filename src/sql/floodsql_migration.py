@@ -11,6 +11,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import psycopg2
+import pyarrow.parquet as pq
+import pyarrow.types as patypes
+from psycopg2 import extras
 
 EXPECTED_TABLES: Tuple[str, ...] = (
     "county",
@@ -121,20 +125,10 @@ def _progress_bar(current: int, total: int, width: int = 24) -> str:
 
 
 def _load_pyarrow():
-    try:
-        import pyarrow.parquet as pq  # type: ignore
-        import pyarrow.types as patypes  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-        raise SystemExit("缺少迁移依赖，请先安装 pyarrow。") from exc
     return pq, patypes
 
 
 def _load_pg_dependencies():
-    try:
-        import psycopg2  # type: ignore
-        from psycopg2 import extras  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-        raise SystemExit("缺少迁移依赖，请先安装 psycopg2-binary。") from exc
     return psycopg2, extras
 
 

@@ -3,10 +3,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-try:
-    from transformers import AutoTokenizer
-except ImportError:
-    AutoTokenizer = None
+from transformers import AutoTokenizer
 
 
 @dataclass
@@ -62,7 +59,7 @@ class BaseModelLoader(ABC):
             return self._counting_tokenizer
         if self._counting_tokenizer_load_failed:
             return None
-        if not self.tokenizer_name_or_path or AutoTokenizer is None:
+        if not self.tokenizer_name_or_path:
             self._counting_tokenizer_load_failed = True
             return None
 

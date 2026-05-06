@@ -5,12 +5,7 @@ import time
 from typing import Dict, List, Any
 
 import yaml
-
-try:
-    from tqdm import tqdm
-except ImportError:
-    def tqdm(iterable, **_kwargs):
-        return iterable
+from tqdm import tqdm
 
 from src.inference.loaders.qwen_model_loader import QwenModelLoader
 from src.inference.loaders.vllm_openai_loader import VllmOpenAILoader

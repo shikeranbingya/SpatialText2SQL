@@ -4,18 +4,8 @@ import json
 import glob
 import time
 import hashlib
-# Keep OpenAI optional so parsing and tests can still run without LLM access.
-try:
-    from openai import OpenAI
-except ModuleNotFoundError:
-    OpenAI = None
-
-# Keep dotenv optional to avoid hard failures when python-dotenv is absent.
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    def load_dotenv(*args, **kwargs):
-        return False
+from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load API settings from .env when available.
 load_dotenv()
@@ -50,7 +40,7 @@ class PostGISFormalParser:
     def __init__(self, function_filter=None):
         api_key = os.getenv("api_key") or os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("base_url") or os.getenv("OPENAI_BASE_URL")
-        if OpenAI is None or not api_key:
+        if not api_key:
             self.client = None
             print("⚠️  [Warn] OpenAI client is not configured. LLM parsing will be unavailable.")
         else:
@@ -121,12 +111,12 @@ class PostGISFormalParser:
             return []
         
         if self.client is None:
-            print(f"      [LLM Error on {func_name}]: OpenAI client not available (missing 'openai' package).")
+            print(f"      [LLM Error on {func_name}]: OpenAI client is not configured.")
             self._record_parse_failure(
                 func_name=func_name,
                 source_file=source_file,
                 raw_ex_text=raw_ex_text,
-                error_message="OpenAI client not available",
+                error_message="OpenAI client is not configured",
                 retry_count=0,
             )
             return []

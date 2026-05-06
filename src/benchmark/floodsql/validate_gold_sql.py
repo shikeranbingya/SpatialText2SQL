@@ -23,19 +23,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import psycopg2
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 os.chdir(REPO_ROOT)
-
-
-def _load_optional_dependencies():
-    try:
-        import psycopg2  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-        raise SystemExit("Missing dependency: install psycopg2-binary first.") from exc
-    return psycopg2
 
 
 def _connection_timeout_sec(db_config: dict, override: int | None) -> int:
@@ -185,8 +180,6 @@ def validate_all(
     float_tolerance: float = 1e-6,
 ) -> dict:
     """Execute all FloodSQL gold SQL queries on PostgreSQL and validate the results."""
-    psycopg2 = _load_optional_dependencies()
-
     results = {
         "dataset": "floodsql_pg",
         "database": db_config["database"],
@@ -340,8 +333,6 @@ def main():
         )
         preprocessor.preprocess("floodsql_pg")
         print()
-
-    import yaml
 
     with open(REPO_ROOT / "config" / "db_config.yaml", "r", encoding="utf-8") as f:
         db_cfg_all = yaml.safe_load(f)

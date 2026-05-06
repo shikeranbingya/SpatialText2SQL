@@ -9,12 +9,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.inference.base import BaseModelLoader, GenerationResult
+from openai import OpenAI
 
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
+from src.inference.base import BaseModelLoader, GenerationResult
 
 
 RETRYABLE_ERROR_MARKERS = (
@@ -326,9 +323,6 @@ class VllmOpenAILoader(BaseModelLoader):
 
     def _create_client(self):
         """创建 OpenAI 兼容客户端。"""
-        if OpenAI is None:
-            raise ImportError("openai 未安装，请先安装 openai 依赖")
-
         if not self.api_base:
             raise ValueError("vLLM 配置缺少 api_base")
 

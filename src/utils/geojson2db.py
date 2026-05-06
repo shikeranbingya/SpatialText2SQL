@@ -3,10 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-try:
-    import geopandas as gpd
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    gpd = None
+import geopandas as gpd
 
 from .logging_config import spatial_logger as logger
 from .shp2db import (
@@ -21,11 +18,6 @@ from .shp2db import (
 
 def read_geojson(geojson_path: str) -> gpd.GeoDataFrame:
     """Read a GeoJSON file into a GeoDataFrame."""
-
-    if gpd is None:
-        raise RuntimeError(
-            "Missing dependency: geopandas. Please install the GIS import extras first."
-        )
 
     try:
         gdf = gpd.read_file(geojson_path)

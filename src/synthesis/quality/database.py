@@ -6,14 +6,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-try:
-    import psycopg2
-    from psycopg2 import sql as pg_sql
-    from psycopg2.extras import RealDictCursor
-except ImportError:  # pragma: no cover
-    psycopg2 = None
-    pg_sql = None
-    RealDictCursor = None
+import psycopg2
+from psycopg2 import sql as pg_sql
+from psycopg2.extras import RealDictCursor
 
 from src.synthesis.database.migration import normalize_postgres_identifier
 from src.synthesis.database.utils import stable_jsonify, to_text
@@ -31,8 +26,6 @@ class PostgreSQLDatabaseClient(DatabaseClient):
     database_id: str
 
     def inspect_schema(self) -> DatabaseSchema:
-        if psycopg2 is None or pg_sql is None or RealDictCursor is None:
-            raise ImportError("psycopg2 is not installed.")
         schema_name = normalize_postgres_identifier(self.database_id, prefix="schema")
         with self._connect() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -62,8 +55,6 @@ class PostgreSQLDatabaseClient(DatabaseClient):
                 return DatabaseSchema(database_id=self.database_id, tables=tables)
 
     def execute_read_only(self, sql: str, *, max_preview_rows: int) -> tuple[int, list[dict[str, object]]]:
-        if psycopg2 is None or pg_sql is None or RealDictCursor is None:
-            raise ImportError("psycopg2 is not installed.")
         schema_name = normalize_postgres_identifier(self.database_id, prefix="schema")
         sql_text = to_text(sql).rstrip(";")
         preview_query = f"SELECT * FROM ({sql_text}) AS qc_sub LIMIT %s"
@@ -216,4 +207,3 @@ class PostgreSQLDatabaseRegistry(DatabaseRegistry):
         if database_id not in self._clients:
             self._clients[database_id] = PostgreSQLDatabaseClient(self.config, database_id)
         return self._clients[database_id]
-

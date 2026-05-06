@@ -5,10 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List
 
-try:
-    import psycopg2  # type: ignore
-except ModuleNotFoundError:  # pragma: no cover - optional in lightweight test envs
-    psycopg2 = None  # type: ignore[assignment]
+import psycopg2
 
 
 PROFILE_NAME = "spatial_qa_geography_v1"
@@ -149,8 +146,6 @@ def _build_base_metadata(db_config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _connect(db_config: Dict[str, Any]):
-    if psycopg2 is None:
-        raise RuntimeError("psycopg2 is not installed")
     return psycopg2.connect(
         host=db_config["host"],
         port=db_config["port"],
@@ -162,11 +157,6 @@ def _connect(db_config: Dict[str, Any]):
 
 def inspect_spatial_qa_benchmark_setup(db_config: Dict[str, Any]) -> Dict[str, Any]:
     metadata = _build_base_metadata(db_config)
-    if psycopg2 is None:
-        metadata["status"] = "unavailable"
-        metadata["reason"] = "psycopg2 is not installed"
-        return metadata
-
     conn = None
     cur = None
     try:
@@ -216,9 +206,6 @@ def apply_spatial_qa_benchmark_setup(
     analyze: bool = True,
     create_missing_only: bool = True,
 ) -> Dict[str, Any]:
-    if psycopg2 is None:
-        raise RuntimeError("psycopg2 is not installed")
-
     before = inspect_spatial_qa_benchmark_setup(db_config)
     if before.get("status") == "check_failed":
         raise RuntimeError(before.get("error") or "Failed to inspect current index status")

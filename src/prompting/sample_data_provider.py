@@ -12,11 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import yaml
-
-try:
-    import psycopg2
-except ModuleNotFoundError:  # pragma: no cover - dependency should exist in runtime env
-    psycopg2 = None  # type: ignore[assignment]
+import psycopg2
 
 from .schema_compactor import DEFAULT_PROJECT_ROOT, SchemaCompactor
 
@@ -152,13 +148,6 @@ class PostgresSampleDataProvider:
             return yaml.safe_load(handle) or {}
 
     def _get_connection(self, db_key: str):
-        if psycopg2 is None:
-            warnings.warn(
-                "psycopg2 不可用，跳过 prompt sample data 注入。",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            return None
         if db_key in self._failed_db_keys:
             return None
 

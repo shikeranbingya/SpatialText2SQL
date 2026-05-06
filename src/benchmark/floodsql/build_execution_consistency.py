@@ -21,6 +21,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+import duckdb
+import psycopg2
 import yaml
 
 
@@ -106,22 +108,6 @@ def resolve_floodsql_paths(
         else (data_root_path / "metadata_parquet.json").resolve()
     )
     return benchmark_root_path, data_root_path, metadata_file
-
-
-def _load_optional_source_dependencies():
-    try:
-        import duckdb  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-        raise SystemExit("Missing dependency: install duckdb first.") from exc
-    return duckdb
-
-
-def _load_optional_target_dependencies():
-    try:
-        import psycopg2  # type: ignore
-    except ModuleNotFoundError as exc:  # pragma: no cover - runtime dependency
-        raise SystemExit("Missing dependency: install psycopg2-binary first.") from exc
-    return psycopg2
 
 
 def _normalize_scalar(value: Any) -> Any:
@@ -464,7 +450,6 @@ def build_consistency_cluster_report(consistency_report: Dict[str, Any]) -> Dict
 
 class DuckDBFloodExecutor:
     def __init__(self, data_root: Path, metadata_path: Path):
-        duckdb = _load_optional_source_dependencies()
         self.metadata = _load_metadata(metadata_path)
         self.layout = discover_floodsql_data_layout(data_root, self.metadata)
         self.conn = duckdb.connect(database=":memory:")
@@ -509,7 +494,6 @@ class DuckDBFloodExecutor:
 
 class PostgresExecutor:
     def __init__(self, db_cfg: Dict[str, Any], *, timeout_ms: int, connect_timeout_sec: int):
-        psycopg2 = _load_optional_target_dependencies()
         self.conn = psycopg2.connect(
             host=db_cfg["host"],
             port=db_cfg["port"],

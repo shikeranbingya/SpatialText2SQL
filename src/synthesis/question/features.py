@@ -10,12 +10,8 @@ from src.synthesis.database.utils import to_text
 
 from .models import SQLFeatureSummary
 
-try:  # pragma: no cover - optional dependency
-    import sqlglot
-    from sqlglot import exp
-except ImportError:  # pragma: no cover
-    sqlglot = None
-    exp = None
+import sqlglot
+from sqlglot import exp
 
 
 AGGREGATE_FUNCTIONS = {"count", "sum", "avg", "min", "max"}
@@ -118,8 +114,6 @@ class SQLFeatureExtractor:
         self,
         sql_text: str,
     ) -> tuple[list[str], list[str], list[str], list[dict[str, str]], int | None]:
-        if sqlglot is None or exp is None:
-            return self._extract_schema_features_regex(sql_text)
         try:  # pragma: no cover - optional dependency path
             expression = sqlglot.parse_one(sql_text, read="postgres")
             tables = []

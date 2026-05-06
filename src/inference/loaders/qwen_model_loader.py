@@ -2,22 +2,11 @@
 import os
 from typing import Dict, Any
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from src.inference.base import BaseModelLoader, GenerationResult
 from src.inference.sql_utils import extract_sql_from_text
-
-# 导入torch
-try:
-    import torch
-except ImportError:
-    print("警告: torch未安装，模型推理将无法工作")
-    torch = None
-
-try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-except ImportError:
-    AutoModelForCausalLM = None
-    AutoTokenizer = None
 
 
 class QwenModelLoader(BaseModelLoader):
@@ -41,11 +30,8 @@ class QwenModelLoader(BaseModelLoader):
             model_path = self.model_path
         
         model_path = os.path.expanduser(model_path)
-        
-        print(f"\n加载模型: {model_path}")
 
-        if AutoTokenizer is None or AutoModelForCausalLM is None:
-            raise RuntimeError("transformers未安装，无法加载Qwen模型")
+        print(f"\n加载模型: {model_path}")
         
         try:
             # 加载tokenizer
@@ -90,9 +76,6 @@ class QwenModelLoader(BaseModelLoader):
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
         
         # 生成
-        if torch is None:
-            raise RuntimeError("torch未安装")
-        
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
@@ -131,7 +114,7 @@ class QwenModelLoader(BaseModelLoader):
             self.tokenizer = None
         
         # 清理 GPU 缓存
-        if torch is not None and torch.cuda.is_available():
+        if torch.cuda.is_available():
             for i in range(torch.cuda.device_count()):
                 with torch.cuda.device(i):
                     torch.cuda.empty_cache()

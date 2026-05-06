@@ -7,10 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol, TypeVar
 
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover
-    OpenAI = None
+from openai import OpenAI
 
 
 @dataclass(frozen=True)
@@ -70,10 +67,6 @@ class OpenAICompatibleLLMClient:
         return api_key
 
     def _create_client(self):
-        if OpenAI is None:
-            raise ImportError(
-                f"openai is not installed. Install it before running {self.missing_dependency_label}."
-            )
         return OpenAI(
             api_key=self._resolve_api_key(),
             base_url=self.base_url,

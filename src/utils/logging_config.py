@@ -4,10 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-try:
-    from tqdm import tqdm
-except ModuleNotFoundError:  # pragma: no cover - optional dependency fallback
-    tqdm = None
+from tqdm import tqdm
 
 _TOP_NAME = __name__.split(".")[0]
 _SPATIAL_LOGGER_NAME = "spatial_importer"
@@ -20,10 +17,7 @@ class TqdmLoggingHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
-            if tqdm is not None:
-                tqdm.write(msg)
-            else:
-                print(msg)
+            tqdm.write(msg)
             self.flush()
         except Exception:
             self.handleError(record)
@@ -79,7 +73,7 @@ def _configure_named_logger(
     log.setLevel(level)
 
     handler: logging.Handler
-    if use_tqdm and tqdm is not None:
+    if use_tqdm:
         handler = TqdmLoggingHandler()
     else:
         handler = logging.StreamHandler()

@@ -12,6 +12,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -21,7 +23,6 @@ os.chdir(REPO_ROOT)
 
 def test_original_flow():
     """Check that the original spatial_qa flow is still wired correctly."""
-    import yaml
     from src.datasets import DataLoaderFactory
 
     config_path = os.path.join(REPO_ROOT, "config", "dataset_config.yaml")

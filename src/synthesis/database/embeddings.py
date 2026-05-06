@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
 
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -40,13 +41,6 @@ class SentenceTransformerEmbeddingProvider(EmbeddingProvider):
     def _load_model(self) -> Any:
         if self._model is not None:
             return self._model
-        try:
-            from sentence_transformers import SentenceTransformer
-        except ImportError as exc:
-            raise ImportError(
-                "sentence-transformers is required for SentenceTransformerEmbeddingProvider. "
-                "Install it with: pip install sentence-transformers"
-            ) from exc
         self._model = SentenceTransformer(self.model_name, device=self.device)
         return self._model
 
@@ -107,4 +101,3 @@ class MockEmbeddingProvider(EmbeddingProvider):
             norms[norms == 0] = 1.0
             matrix = matrix / norms
         return matrix
-

@@ -18,6 +18,9 @@ import sys
 import time
 from pathlib import Path
 
+import psycopg2
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -60,8 +63,6 @@ def validate_all(
     connect_timeout_sec: int = 10,
 ):
     """Execute all gold SQL queries on PostgreSQL and summarize the results."""
-    import psycopg2
-
     results = {
         "total": 0,
         "gold_success": 0,
@@ -154,7 +155,6 @@ def main():
         preprocessor.preprocess("spatialsql_pg")
         print()
 
-    import yaml
     with open(REPO_ROOT / "config" / "db_config.yaml", "r", encoding="utf-8") as f:
         db_cfg_all = yaml.safe_load(f)
     db_config = db_cfg_all.get("databases", {}).get("spatial_sql", db_cfg_all.get("database", {}))

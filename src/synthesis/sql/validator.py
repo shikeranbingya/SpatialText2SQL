@@ -11,12 +11,8 @@ from src.synthesis.database.utils import to_text
 from .function_library import PostGISFunctionLibrary, fixed_spatial_join_function_names
 from .models import SQLValidationResult
 
-try:  # pragma: no cover - optional dependency
-    import sqlglot
-    from sqlglot import exp
-except ImportError:  # pragma: no cover
-    sqlglot = None
-    exp = None
+import sqlglot
+from sqlglot import exp
 
 
 DANGEROUS_SQL_PATTERN = re.compile(

@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+import networkx as nx
 import numpy as np
 
 from .embeddings import EmbeddingProvider
@@ -13,16 +14,6 @@ from .models import CanonicalSpatialTable
 from .text import build_table_text
 
 LOGGER = logging.getLogger(__name__)
-
-
-def _require_networkx():
-    try:
-        import networkx as nx  # type: ignore
-    except ImportError as exc:
-        raise ImportError(
-            "networkx is required for relation graph construction. Install it with: pip install networkx"
-        ) from exc
-    return nx
 
 
 def _cosine_similarity_matrix(embeddings: np.ndarray) -> np.ndarray:
@@ -45,7 +36,6 @@ class RelationGraphBuilder:
         self,
         tables: Sequence[CanonicalSpatialTable],
     ) -> tuple[Any, dict[str, Any]]:
-        nx = _require_networkx()
         ordered_tables = sorted(tables, key=lambda table: table.table_id)
         graph = nx.Graph()
         for table in ordered_tables:
@@ -102,4 +92,3 @@ class RelationGraphBuilder:
             stats["effective_target_avg_degree"],
         )
         return graph, stats
-

@@ -7,11 +7,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-
-try:
-    from sentence_transformers import SentenceTransformer
-except ModuleNotFoundError:  # pragma: no cover - 允许无语义检索依赖时降级
-    SentenceTransformer = None  # type: ignore[assignment]
+from sentence_transformers import SentenceTransformer
 
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
@@ -112,7 +108,7 @@ class _FloodSQLMetadataBase:
                 )
             self.column_docs[table_name] = column_entries
 
-        if self.mode == "semantic" and SentenceTransformer is not None:
+        if self.mode == "semantic":
             self.embedding_model = SentenceTransformer(self.embedding_model_name)
             self.table_embeddings = {
                 table_name: self.embedding_model.encode(text)

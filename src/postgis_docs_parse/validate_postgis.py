@@ -1,28 +1,15 @@
-# Keep psycopg2 optional so tests and static checks can run without a DB.
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-except ModuleNotFoundError:
-    psycopg2 = None
-    RealDictCursor = None
-from pathlib import Path
 import json
 import os
 import re
 import time
-from datetime import datetime
 import argparse
-# Keep OpenAI optional so non-LLM validation paths remain usable.
-try:
-    from openai import OpenAI
-except ModuleNotFoundError:
-    OpenAI = None
-# Keep dotenv optional to avoid hard dependency failures.
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    def load_dotenv(*args, **kwargs):
-        return False
+from datetime import datetime
+from pathlib import Path
+
+import psycopg2
+from dotenv import load_dotenv
+from openai import OpenAI
+from psycopg2.extras import RealDictCursor
 
 # Load environment variables (API Key)
 load_dotenv()
@@ -49,7 +36,7 @@ class PostGISValidator:
         # Initialize LLM for auto-fixing SQL
         api_key = os.getenv("api_key") or os.getenv("OPENAI_API_KEY")
         base_url = os.getenv("base_url") or os.getenv("OPENAI_BASE_URL")
-        if OpenAI is None or not api_key:
+        if not api_key:
             self.client = None
             print("⚠️  [Warn] OpenAI client is not configured. LLM auto-fix will be unavailable.")
         else:
@@ -176,10 +163,7 @@ class PostGISValidator:
             print("No external_data_import tables found in manual review.")
             return
         db_url = self._build_sqlalchemy_db_url()
-        try:
-            from . import shp2db as shp2db_module
-        except ModuleNotFoundError as e:
-            raise RuntimeError("Missing dependencies for shp2db importer. Please install geopandas/fiona/sqlalchemy.") from e
+        from . import shp2db as shp2db_module
         for table_name in sorted(targets):
             cfg = self.external_table_sources.get(table_name) or {}
             if cfg.get("imported"):
@@ -307,17 +291,12 @@ class PostGISValidator:
         """
         Establish DB connection with autocommit disabled.
         """
-        if psycopg2 is None:
-            raise RuntimeError("psycopg2 is not installed. Please install it to run DB validation.")
         conn = psycopg2.connect(**self.db_config, cursor_factory=RealDictCursor)
         conn.autocommit = False 
         return conn
 
     def check_environment(self):
         """Verify PostGIS extension presence."""
-        if psycopg2 is None:
-            print("❌ [Env Check Failed] psycopg2 is not installed. Cannot connect to PostGIS.")
-            exit(1)
         try:
             conn = self.get_db_connection()
             with conn.cursor() as cur:
@@ -333,7 +312,7 @@ class PostGISValidator:
     def _generate_table_fix_via_llm(self, failed_sql, error_msg):
         """Ask LLM to generate DDL for missing tables."""
         if self.client is None:
-            print(f"      [Auto-Fix] LLM client unavailable. Please install 'openai' package or provide DDL manually.")
+            print("      [Auto-Fix] LLM client unavailable. Please configure API access or provide DDL manually.")
             return None
         print(f"      [Auto-Fix] Asking LLM to fix missing table...")
         prompt = f"""

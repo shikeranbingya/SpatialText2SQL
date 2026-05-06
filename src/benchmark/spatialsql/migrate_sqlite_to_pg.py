@@ -20,6 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import psycopg2
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -37,7 +40,6 @@ SQLITE_SKIP_PATTERN = re.compile(
 
 
 def load_db_config(config_path: Path) -> dict:
-    import yaml
     with open(config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return data.get("database", {})
@@ -125,7 +127,6 @@ def migrate_one_db(
 
     # Optionally collect row counts from PostgreSQL when psycopg2 is available.
     try:
-        import psycopg2
         conn = psycopg2.connect(
             host=db_config.get("host"),
             port=db_config.get("port"),
@@ -192,7 +193,6 @@ def main():
             }
             schema_err = None
             try:
-                import psycopg2
                 conn = psycopg2.connect(
                     host=db_config["host"],
                     port=db_config["port"],

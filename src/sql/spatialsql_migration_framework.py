@@ -16,6 +16,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import psycopg2
+import yaml
+
 from src.inference.sql_utils import normalize_spatialsql_predicted_sql
 from src.sql.sql_dialect_adapter import classify_spatialsql_failure, convert_spatialite_to_postgis
 
@@ -92,8 +95,6 @@ class SplitSpec:
 
 def load_spatialsql_db_config(config_path: Path) -> Dict[str, Any]:
     """加载 `spatial_sql` 目标数据库配置。"""
-    import yaml
-
     with open(config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     databases = data.get("databases", {})
@@ -418,8 +419,6 @@ def _write_checkpoint(checkpoint_path: Path, checkpoint: Dict[str, Any]) -> None
 
 
 def _safe_pg_connect(db_cfg: Dict[str, Any]):
-    import psycopg2
-
     timeout_cfg = db_cfg.get("timeout", {}) if isinstance(db_cfg.get("timeout"), dict) else {}
     return psycopg2.connect(
         host=db_cfg["host"],
@@ -524,8 +523,6 @@ def _manual_migrate_blob_geometry_table(
     table_info: Dict[str, Any],
     db_cfg: Dict[str, Any],
 ) -> Tuple[bool, str]:
-    import psycopg2
-
     geometry_column = table_info.get("expected_geometry_columns", [None])[0]
     if not geometry_column:
         return False, "missing geometry column for manual blob geometry fallback"
@@ -1030,7 +1027,6 @@ def validate_geometry_columns(
 
 def load_spatialsql_items(dataset_config_path: Path) -> List[Dict[str, Any]]:
     """加载 SpatialSQL QA 样本。"""
-    import yaml
     from src.datasets.loaders.spatial_sql_loader import SpatialSQLLoader
 
     with open(dataset_config_path, "r", encoding="utf-8") as f:

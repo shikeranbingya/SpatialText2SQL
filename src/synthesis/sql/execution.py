@@ -6,14 +6,9 @@ import logging
 import time
 from typing import Any, Sequence
 
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    from psycopg2 import sql as pg_sql
-except ImportError:  # pragma: no cover
-    psycopg2 = None
-    RealDictCursor = None
-    pg_sql = None
+import psycopg2
+from psycopg2 import sql as pg_sql
+from psycopg2.extras import RealDictCursor
 
 from src.synthesis.database.migration import normalize_postgres_identifier
 from src.synthesis.database.models import SynthesizedSpatialDatabase
@@ -51,13 +46,6 @@ class SQLExecutionChecker:
                 success=False,
                 error_message="Refused to execute non-read-only SQL.",
             )
-        if psycopg2 is None:
-            return SQLExecutionResult(
-                executed=False,
-                success=False,
-                error_message="psycopg2 is not installed.",
-            )
-
         catalog_name = (
             normalize_postgres_identifier(self.db_config.database, prefix="catalog")
             or self.db_config.database
