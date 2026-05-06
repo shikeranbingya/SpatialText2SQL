@@ -47,7 +47,7 @@ class FinetuneDataConfig:
 
 @dataclass(frozen=True)
 class FinetuneModelConfig:
-    model_name_or_path: str = "Qwen/Qwen2.5-3B-Instruct"
+    model_name_or_path: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
     tokenizer_name_or_path: str = ""
     trust_remote_code: bool = False
     torch_dtype: str = "bfloat16"

@@ -44,7 +44,8 @@ class FinetunePromptRenderer:
         )
 
     def render_completion(self, cot: str, sql: str) -> str:
-        return f"<think>\n{to_text(cot).strip()}\n</think>\n<sql>\n{to_text(sql).strip()}\n</sql>"
+        _ = cot
+        return to_text(sql).strip()
 
     @staticmethod
     def build_runtime_prompt_context(

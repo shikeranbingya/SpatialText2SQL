@@ -342,13 +342,14 @@ Default settings:
 - Shell entrypoint: `scripts/finetune/train.sh`
 - Python CLI: `src/finetune/cli.py`
 - Prompt template: `prompts/train_prompt.txt`
+- Default base model: `Qwen/Qwen2.5-Coder-7B-Instruct`
 
 Training data behavior:
 
 - The fine-tuning loader reads `question`, `sql`, `database_id`, `question_id`, `source_difficulty_level`, `used_tables`, `used_columns`, `used_spatial_functions`, and `sql_features` directly from `nl2sql.jsonl`.
 - If a row already includes `metadata.database_context`, fine-tuning uses that embedded schema context directly.
 - Otherwise, fine-tuning falls back to the configured PostgreSQL/PostGIS connection to fetch schema and representative values for the tables listed in `used_tables`.
-- Prepared samples are rendered as prompt/completion pairs where the completion format is `COT + final SQL`, wrapped in `<think>...</think>` and `<sql>...</sql>`.
+- Prepared samples are rendered as prompt/completion pairs where the completion is the final SQL only, without custom reasoning tags.
 
 Edit persistent settings in `config/finetune.yaml`.
 

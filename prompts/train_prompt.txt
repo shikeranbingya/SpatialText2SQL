@@ -17,11 +17,10 @@ Translate the natural-language spatial question into one executable PostgreSQL/P
 {{question_block}}
 
 ## Response Format
-First provide concise reasoning inside `<think>...</think>`.
-Then provide the final SQL inside `<sql>...</sql>`.
+Return one executable PostgreSQL/PostGIS SQL query only.
 
 ## Response Requirements
 - Use only the listed tables and columns.
 - Preserve the question semantics exactly.
 - Generate one read-only PostgreSQL/PostGIS SQL query only.
-- Do not use `SELECT *`.
+- Do not add explanations, reasoning, labels, or Markdown code fences.

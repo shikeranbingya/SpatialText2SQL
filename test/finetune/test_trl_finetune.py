@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from src.finetune.config import DEFAULT_TRL_FINETUNE_CONFIG_PATH
-from src.finetune.config import FinetuneDBConfig, FinetuneDataConfig
+from src.finetune.config import FinetuneDBConfig, FinetuneDataConfig, FinetuneModelConfig
 from src.finetune.dataset import SpatialText2SQLDatasetBuilder
 from src.finetune.models import RawFinetuneSample
 from src.finetune.prompting import FinetunePromptRenderer
@@ -23,6 +23,9 @@ class FakeMetadataProvider:
 class TRLFinetuneTests(unittest.TestCase):
     def test_default_finetune_config_path_matches_repo_config(self):
         self.assertTrue(str(DEFAULT_TRL_FINETUNE_CONFIG_PATH).endswith("config/finetune.yaml"))
+
+    def test_default_finetune_model_matches_repo_default(self):
+        self.assertEqual(FinetuneModelConfig().model_name_or_path, "Qwen/Qwen2.5-Coder-7B-Instruct")
 
     def test_raw_finetune_sample_accepts_nl2sql_metadata(self):
         row = RawFinetuneSample.from_dict(
@@ -141,8 +144,7 @@ class TRLFinetuneTests(unittest.TestCase):
         self.assertEqual(len(prepared), 1)
         self.assertEqual(prepared[0].question_id, 0)
         self.assertEqual(prepared[0].difficulty, "medium")
-        self.assertIn("<think>", prepared[0].completion)
-        self.assertIn("<sql>", prepared[0].completion)
+        self.assertEqual(prepared[0].completion, "SELECT name FROM table_1 LIMIT 5")
         self.assertIn("## Schema", prepared[0].prompt)
         self.assertIn('"geom": "POINT"', prepared[0].prompt)
 

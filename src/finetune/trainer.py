@@ -7,7 +7,11 @@ import logging
 from pathlib import Path
 from typing import Any, Sequence
 
+import datasets
 import numpy as np
+import torch
+import transformers
+import trl
 
 from .config import SpatialText2SQLFinetuneConfig
 from .models import PreparedFinetuneSample
@@ -23,13 +27,12 @@ class TRLFullFinetuner:
         if not rows:
             raise ValueError("No prepared fine-tune rows were provided.")
 
-        datasets_lib, transformers_lib, trl_lib = self._import_training_stack()
         train_rows, eval_rows = self._split_rows(rows)
-        train_dataset = datasets_lib.Dataset.from_list(
+        train_dataset = datasets.Dataset.from_list(
             [{"prompt": row.prompt, "completion": row.completion} for row in train_rows]
         )
         eval_dataset = (
-            datasets_lib.Dataset.from_list(
+            datasets.Dataset.from_list(
                 [{"prompt": row.prompt, "completion": row.completion} for row in eval_rows]
             )
             if eval_rows
@@ -37,7 +40,7 @@ class TRLFullFinetuner:
         )
 
         tokenizer_name = self.config.model.tokenizer_name_or_path or self.config.model.model_name_or_path
-        tokenizer = transformers_lib.AutoTokenizer.from_pretrained(
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
             tokenizer_name,
             trust_remote_code=self.config.model.trust_remote_code,
         )
@@ -49,12 +52,12 @@ class TRLFullFinetuner:
         model_kwargs = {
             "trust_remote_code": self.config.model.trust_remote_code,
         }
-        torch_dtype = self._resolve_torch_dtype(transformers_lib)
+        torch_dtype = self._resolve_torch_dtype()
         if torch_dtype is not None:
             model_kwargs["torch_dtype"] = torch_dtype
         if self.config.model.attn_implementation:
             model_kwargs["attn_implementation"] = self.config.model.attn_implementation
-        model = transformers_lib.AutoModelForCausalLM.from_pretrained(
+        model = transformers.AutoModelForCausalLM.from_pretrained(
             self.config.model.model_name_or_path,
             **model_kwargs,
         )
@@ -73,12 +76,12 @@ class TRLFullFinetuner:
             total_params,
         )
 
-        sft_config = self._build_sft_config(trl_lib.SFTConfig, has_eval=bool(eval_rows))
+        sft_config = self._build_sft_config(trl.SFTConfig, has_eval=bool(eval_rows))
         output_dir = Path(self.config.training.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         trainer = self._build_trainer(
-            trl_lib.SFTTrainer,
+            trl.SFTTrainer,
             model=model,
             sft_config=sft_config,
             train_dataset=train_dataset,
@@ -190,11 +193,10 @@ class TRLFullFinetuner:
         maybe_set("logging_strategy", "steps")
         return sft_config_cls(**kwargs)
 
-    def _resolve_torch_dtype(self, transformers_lib):
+    def _resolve_torch_dtype(self):
         dtype_name = self.config.model.torch_dtype.strip().lower()
         if not dtype_name or dtype_name == "auto":
             return None
-        import torch
 
         mapping = {
             "bfloat16": torch.bfloat16,
@@ -207,19 +209,3 @@ class TRLFullFinetuner:
         if dtype_name not in mapping:
             raise ValueError(f"Unsupported torch_dtype: {self.config.model.torch_dtype}")
         return mapping[dtype_name]
-
-    @staticmethod
-    def _import_training_stack():
-        try:
-            import datasets
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError("datasets is required for fine-tuning. Install it with `pip install datasets`.") from exc
-        try:
-            import transformers
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError("transformers is required for fine-tuning.") from exc
-        try:
-            import trl
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError("trl is required for fine-tuning. Install it with `pip install trl`.") from exc
-        return datasets, transformers, trl

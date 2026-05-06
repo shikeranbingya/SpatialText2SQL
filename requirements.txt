@@ -1,4 +1,5 @@
 chromadb
+accelerate
 datasets
 fiona
 geoalchemy2
