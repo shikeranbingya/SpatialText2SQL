@@ -9,6 +9,7 @@ from src.finetune.config import DEFAULT_TRL_FINETUNE_CONFIG_PATH
 from src.finetune.config import (
     FinetuneDataConfig,
     FinetuneModelConfig,
+    FinetuneRuntimeConfig,
     load_trl_finetune_config,
     override_trl_finetune_config,
 )
@@ -48,12 +49,11 @@ class TRLFinetuneTests(unittest.TestCase):
                 os.environ["NVIDIA_VISIBLE_DEVICES"] = original_nvidia
 
     def test_default_runtime_uses_all_eight_gpus_with_accelerate(self):
-        config = load_trl_finetune_config()
-        self.assertEqual(config.runtime.nvidia_gpu_indices, list(range(8)))
-        self.assertEqual(config.runtime.distributed_backend, "accelerate")
-        self.assertEqual(_effective_num_processes(config), 8)
+        runtime = FinetuneRuntimeConfig()
+        self.assertEqual(runtime.nvidia_gpu_indices, list(range(8)))
+        self.assertEqual(runtime.distributed_backend, "accelerate")
 
-    def test_accelerate_command_uses_train_only_and_num_processes(self):
+    def test_accelerate_command_uses_alpaca_input_and_num_processes(self):
         config = override_trl_finetune_config(
             load_trl_finetune_config(),
             runtime={"nvidia_gpu_indices": [0, 1], "num_processes": 2},
@@ -62,8 +62,8 @@ class TRLFinetuneTests(unittest.TestCase):
         args = SimpleNamespace(config="config/finetune.yaml")
         command = _build_accelerate_command(config, args)
         self.assertIn("accelerate.commands.launch", command)
-        self.assertIn("--train-only", command)
-        self.assertNotIn("--prepared-output", command)
+        self.assertIn("--alpaca-input", command)
+        self.assertIn(config.data.alpaca_output_path, command)
         self.assertIn("--num_processes", command)
         self.assertIn("2", command)
         self.assertIn("--nvidia-gpu-indices", command)

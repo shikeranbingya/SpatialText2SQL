@@ -15,8 +15,7 @@ if [[ $# -ge 1 && ( "${1}" == "--help" || "${1}" == "-h" ) ]]; then
 Usage: $(basename "$0") [extra python args...]
 
 Default config: ${DEFAULT_CONFIG}
-This script trains directly from an existing Alpaca-style JSONL file.
-Run scripts/finetune/format_nl2sql.sh first if the Alpaca file has not been generated yet.
+This script formats nl2sql.jsonl into an Alpaca-style JSONL file for downstream training.
 
 Optional environment overrides:
   FINETUNE_CONFIG
@@ -24,9 +23,8 @@ Optional environment overrides:
 
 Examples:
   $(basename "$0")
-  $(basename "$0") --alpaca-input data/processed/finetune/custom_nl2sql_alpaca.jsonl
-  $(basename "$0") --nvidia-gpu-indices 0,1,2,3,4,5,6,7
-  $(basename "$0") --model-name-or-path Qwen/Qwen2.5-7B-Instruct --output-dir outputs/finetune/qwen25_7b_full
+  $(basename "$0") --input data/processed/nl2sql.jsonl
+  $(basename "$0") --alpaca-output data/processed/finetune/custom_nl2sql_alpaca.jsonl
 EOF
   exit 0
 fi
@@ -34,6 +32,6 @@ fi
 CONFIG_PATH="${FINETUNE_CONFIG:-${TRL_SPATIAL_TEXT2SQL_CONFIG:-${DEFAULT_CONFIG}}}"
 
 PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}" \
-  python -m src.finetune.cli \
+  python -m src.finetune.formatter_cli \
     --config "${CONFIG_PATH}" \
     "$@"

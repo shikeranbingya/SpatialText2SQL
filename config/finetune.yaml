@@ -1,5 +1,7 @@
 data:
+  # Source nl2sql rows consumed by the standalone formatter step.
   input_path: data/processed/nl2sql.jsonl
+  # Alpaca-format JSONL produced by scripts/finetune/format_nl2sql.sh and consumed by train.sh.
   alpaca_output_path: data/processed/finetune/nl2sql_alpaca.jsonl
   task_description: Translate the spatial question into one executable PostgreSQL/PostGIS SQL query using the provided schema and representative values.
   eval_ratio: 0.02
@@ -8,14 +10,14 @@ data:
   shuffle_seed: 42
 
 model:
-  model_name_or_path: Qwen/Qwen2.5-Coder-7B-Instruct
+  model_name_or_path: /data/llm/qwen/Qwen2.5-Coder-7B-Instruct
   tokenizer_name_or_path: ""
   trust_remote_code: false
   torch_dtype: bfloat16
   attn_implementation: ""
 
 training:
-  output_dir: outputs/finetune/trl_spatial_text2sql_full
+  output_dir: /data/llm/finetuned/qwen/Qwen2.5-Coder-7B-Instruct-Tuned
   overwrite_output_dir: false
   per_device_train_batch_size: 1
   per_device_eval_batch_size: 1
@@ -47,7 +49,8 @@ logging:
   log_path: ""
 
 runtime:
-  nvidia_gpu_indices: [0, 1, 2, 3, 4, 5, 6, 7]
+  #  nvidia_gpu_indices: [0, 1, 2, 3, 4, 5, 6, 7]
+  nvidia_gpu_indices: [1, 7]
   distributed_backend: accelerate
   num_processes: 0
   num_machines: 1

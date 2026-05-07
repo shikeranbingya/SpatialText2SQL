@@ -313,19 +313,24 @@ Edit persistent settings in `config/quality_control.yaml`.
 
 ## Fine-Tuning
 
-Prepare `nl2sql` training data and run TRL full-parameter fine-tuning:
+First format `nl2sql` into Alpaca JSONL, then run TRL full-parameter fine-tuning:
 
 ```bash
+scripts/finetune/format_nl2sql.sh
 scripts/finetune/train.sh
 ```
 
 Typical usage:
 
 ```bash
-# Prepare the training JSONL only
-scripts/finetune/train.sh --prepare-only
+# Format nl2sql into Alpaca JSONL
+scripts/finetune/format_nl2sql.sh
 
-# Train from the default nl2sql input with a different base model
+# Format with a custom Alpaca output path
+scripts/finetune/format_nl2sql.sh \
+  --alpaca-output data/processed/finetune/custom_nl2sql_alpaca.jsonl
+
+# Train from the default Alpaca input with a different base model
 scripts/finetune/train.sh \
   --model-name-or-path Qwen/Qwen2.5-7B-Instruct \
   --output-dir outputs/finetune/qwen25_7b_full
@@ -336,16 +341,18 @@ scripts/finetune/train.sh --nvidia-gpu-indices 0,1,2,3,4,5,6,7
 # Restrict training to two NVIDIA GPUs by physical index
 scripts/finetune/train.sh --nvidia-gpu-indices 0,1
 
-# Reuse an already formatted Alpaca training file
-scripts/finetune/train.sh --train-only
+# Train from a specific Alpaca file
+scripts/finetune/train.sh --alpaca-input data/processed/finetune/custom_nl2sql_alpaca.jsonl
 ```
 
 Default settings:
 
 - Config file: `config/finetune.yaml`
-- Input NL2SQL file: `data/processed/nl2sql.jsonl`
+- Formatter input NL2SQL file: `data/processed/nl2sql.jsonl`
 - Alpaca training file: `data/processed/finetune/nl2sql_alpaca.jsonl`
+- Formatter shell entrypoint: `scripts/finetune/format_nl2sql.sh`
 - Shell entrypoint: `scripts/finetune/train.sh`
+- Formatter Python CLI: `src/finetune/formatter_cli.py`
 - Python CLI: `src/finetune/cli.py`
 - Prompt instruction layout is built directly in `src/finetune/prompting.py`
 - Default base model: `Qwen/Qwen2.5-Coder-7B-Instruct`
@@ -359,9 +366,10 @@ Training data behavior:
 - The fine-tuning loader reads `question`, `sql`, `database_id`, `question_id`, `source_difficulty_level`, `used_tables`, `used_columns`, `used_spatial_functions`, and `sql_features` directly from `nl2sql.jsonl`.
 - Fine-tuning only uses the embedded `metadata.database_context` carried by each `nl2sql` row.
 - If embedded metadata is missing, prompt assembly keeps the sample and leaves schema / representative-value sections empty; it does not connect back to PostgreSQL/PostGIS.
-- The formatter first writes Alpaca rows with `instruction`, `input`, and `output`, and TRL training reads that Alpaca file directly.
+- `scripts/finetune/format_nl2sql.sh` writes Alpaca rows with `instruction`, `input`, and `output`.
+- `scripts/finetune/train.sh` reads that Alpaca file directly and does not reformat `nl2sql.jsonl` during startup.
 - When `runtime.nvidia_gpu_indices` is set, the fine-tune CLI exports `CUDA_VISIBLE_DEVICES` and `NVIDIA_VISIBLE_DEVICES` before importing the trainer stack.
-- When more than one visible GPU is configured and `runtime.distributed_backend=accelerate`, the CLI prepares the dataset once on the parent process and then relaunches training with `accelerate launch`.
+- When more than one visible GPU is configured and `runtime.distributed_backend=accelerate`, the CLI relaunches training with `accelerate launch` against the existing Alpaca file.
 - If `training.deepspeed_config_path` is provided, the Hugging Face trainer passes that DeepSpeed config through to TRL/HF training under the same `accelerate` launch flow.
 
 Edit persistent settings in `config/finetune.yaml`.
