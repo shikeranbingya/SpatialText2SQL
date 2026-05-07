@@ -117,6 +117,7 @@ class NLSQLSample:
     question: str
     sql: str
     sql_id: str = ""
+    sql_reasoning_summary: str = ""
     difficulty_level: str = ""
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
@@ -146,6 +147,7 @@ class NLSQLSample:
             "database_id",
             "question",
             "sql",
+            "sql_reasoning_summary",
             "difficulty_level",
             "source_difficulty_level",
             "used_tables",
@@ -165,6 +167,7 @@ class NLSQLSample:
             database_id=database_id,
             question=question,
             sql=sql,
+            sql_reasoning_summary=to_text(payload.get("sql_reasoning_summary")),
             difficulty_level=to_text(payload.get("difficulty_level") or payload.get("source_difficulty_level")),
             used_tables=_as_text_list(payload.get("used_tables")),
             used_columns=_as_text_list(payload.get("used_columns")),
@@ -181,6 +184,7 @@ class NLSQLSample:
             "database_id": self.database_id,
             "question": self.question,
             "sql": self.sql,
+            "sql_reasoning_summary": self.sql_reasoning_summary,
             "difficulty_level": self.difficulty_level,
             "used_tables": list(self.used_tables),
             "used_columns": list(self.used_columns),
@@ -198,6 +202,8 @@ class NLSQLSample:
         row["database_id"] = self.database_id
         row["question"] = self.question
         row["sql"] = self.sql
+        if self.sql_reasoning_summary:
+            row["sql_reasoning_summary"] = self.sql_reasoning_summary
 
         if self.linguistic_style:
             if "style" in row:

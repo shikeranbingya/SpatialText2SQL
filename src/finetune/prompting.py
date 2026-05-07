@@ -4,48 +4,95 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .utils import stable_jsonify, to_text
 
 
 class FinetunePromptRenderer:
+    INSTRUCTION_HEADER = "You are an expert spatial Text-to-SQL model."
+    RESPONSE_REQUIREMENTS = (
+        "Return a concise reasoning summary first.",
+        "Then return one executable PostgreSQL/PostGIS SQL query inside a single ```sql``` code block.",
+        "Use only the listed tables and columns.",
+        "Preserve the question semantics exactly.",
+        "Generate one read-only PostgreSQL/PostGIS SQL query only.",
+        "Do not add any extra explanation outside the reasoning summary and the SQL code block.",
+    )
+
     def __init__(
         self,
         *,
-        template_path: str | Path,
         task_description: str,
         max_representative_rows: int = 3,
     ) -> None:
-        self.template_path = Path(template_path)
         self.task_description = to_text(task_description)
         self.max_representative_rows = max(int(max_representative_rows), 1)
-        self._template_text: str | None = None
+
+    def render_instruction(self) -> str:
+        lines = [
+            self.INSTRUCTION_HEADER,
+            "",
+            "## Task Description",
+            self.task_description,
+            "",
+            "## Response Requirements",
+            *[f"- {line}" for line in self.RESPONSE_REQUIREMENTS],
+        ]
+        return "\n".join(lines).strip()
+
+    def render_input(
+        self,
+        *,
+        question: str,
+        schema_lines: Sequence[str],
+        representative_values: Mapping[str, Any],
+    ) -> str:
+        sections = [
+            "## Schema",
+            "\n".join(schema_lines) if schema_lines else "No schema available.",
+            "",
+            "## Representative Values",
+            self._stable_json_text(representative_values),
+            "",
+            "## Question",
+            to_text(question),
+        ]
+        return "\n".join(sections).strip()
 
     def render_prompt(
         self,
         *,
         question: str,
         schema_lines: Sequence[str],
-        spatial_lines: Sequence[str],
         representative_values: Mapping[str, Any],
     ) -> str:
-        template = self._load_template_text()
-        return self._render_template(
-            template,
-            {
-                "task_description": self.task_description,
-                "schema_block": "\n".join(schema_lines) if schema_lines else "No schema available.",
-                "spatial_field_block": "\n".join(spatial_lines) if spatial_lines else "No spatial fields listed.",
-                "representative_values_block": self._stable_json_text(representative_values),
-                "question_block": to_text(question),
-            },
+        return self.compose_prompt(
+            self.render_instruction(),
+            self.render_input(
+                question=question,
+                schema_lines=schema_lines,
+                representative_values=representative_values,
+            ),
         )
 
-    def render_completion(self, cot: str, sql: str) -> str:
-        _ = cot
-        return to_text(sql).strip()
+    @staticmethod
+    def compose_prompt(instruction: str, input_text: str) -> str:
+        instruction_text = to_text(instruction).strip()
+        input_block = to_text(input_text).strip()
+        if instruction_text and input_block:
+            return f"{instruction_text}\n\n{input_block}"
+        return instruction_text or input_block
+
+    def render_output(self, reasoning_summary: str, sql: str) -> str:
+        sql_text = to_text(sql).strip()
+        reasoning = to_text(reasoning_summary).strip()
+        if not sql_text:
+            return reasoning
+        sql_block = f"```sql\n{sql_text}\n```"
+        if not reasoning:
+            return sql_block
+        return f"{reasoning}\n\n{sql_block}"
 
     @staticmethod
     def build_runtime_prompt_context(
@@ -53,14 +100,13 @@ class FinetunePromptRenderer:
         *,
         included_tables: Sequence[str] | None = None,
         max_representative_rows: int = 3,
-    ) -> tuple[list[str], list[str], dict[str, Any]]:
+    ) -> tuple[list[str], dict[str, Any]]:
         included = {
             to_text(table_name)
             for table_name in (included_tables or [])
             if to_text(table_name)
         } or None
         schema_lines: list[str] = []
-        spatial_lines: list[str] = []
         representative_values: dict[str, Any] = {}
         for table_meta in (database_runtime_metadata or {}).get("tables", []):
             if not isinstance(table_meta, Mapping):
@@ -90,20 +136,7 @@ class FinetunePromptRenderer:
                 geometry_columns=geometry_columns,
                 limit=max_representative_rows,
             )
-            for field in table_meta.get("spatial_fields", []):
-                if not isinstance(field, Mapping):
-                    continue
-                spatial_name = to_text(field.get("column_name") or field.get("canonical_name"))
-                column_type = to_text(field.get("column_type"))
-                spatial_type = to_text(field.get("spatial_type")) or "spatial"
-                geometry_type = to_text(field.get("geometry_type")) or "GEOMETRY"
-                srid = field.get("srid")
-                if spatial_name:
-                    spatial_lines.append(
-                        f"- {table_name}.{spatial_name} "
-                        f"(type={column_type or spatial_type}, family={spatial_type}, geometry_type={geometry_type}, srid={srid if srid not in (None, '') else 'unknown'})"
-                    )
-        return schema_lines, spatial_lines, representative_values
+        return schema_lines, representative_values
 
     @staticmethod
     def _prepare_representative_rows(
@@ -205,18 +238,6 @@ class FinetunePromptRenderer:
                 row[column_name] = items[index] if index < len(items) else None
             rows.append(row)
         return rows
-
-    def _load_template_text(self) -> str:
-        if self._template_text is None:
-            self._template_text = self.template_path.read_text(encoding="utf-8")
-        return self._template_text
-
-    @staticmethod
-    def _render_template(template_text: str, placeholders: Mapping[str, Any]) -> str:
-        rendered = template_text
-        for key, value in placeholders.items():
-            rendered = rendered.replace(f"{{{{{key}}}}}", to_text(value))
-        return rendered
 
     @staticmethod
     def _stable_json_text(value: Any) -> str:

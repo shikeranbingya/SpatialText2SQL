@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -12,7 +12,7 @@ from .utils import stable_jsonify, to_text
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[3]
+    return Path(__file__).resolve().parents[2]
 
 
 DEFAULT_TRL_FINETUNE_CONFIG_PATH = _project_root() / "config" / "finetune.yaml"
@@ -21,11 +21,10 @@ DEFAULT_TRL_FINETUNE_CONFIG_PATH = _project_root() / "config" / "finetune.yaml"
 @dataclass(frozen=True)
 class FinetuneDataConfig:
     input_path: str = str(_project_root() / "data" / "processed" / "nl2sql.jsonl")
-    prepared_output_path: str = str(_project_root() / "data" / "processed" / "finetune" / "spatial_text2sql_trl_train.jsonl")
-    prompt_template_path: str = str(_project_root() / "prompts" / "train_prompt.txt")
+    alpaca_output_path: str = str(_project_root() / "data" / "processed" / "finetune" / "nl2sql_alpaca.jsonl")
     task_description: str = (
         "Translate the spatial question into one executable PostgreSQL/PostGIS SQL query "
-        "using the provided schema, spatial metadata, and representative values."
+        "using the provided schema and representative values."
     )
     eval_ratio: float = 0.02
     question_id_start: int = 0
@@ -69,6 +68,7 @@ class FinetuneTrainingConfig:
     report_to: str = "none"
     seed: int = 42
     resume_from_checkpoint: str = ""
+    deepspeed_config_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -78,11 +78,22 @@ class FinetuneLoggingConfig:
 
 
 @dataclass(frozen=True)
+class FinetuneRuntimeConfig:
+    nvidia_gpu_indices: list[int] = field(default_factory=lambda: list(range(8)))
+    distributed_backend: str = "accelerate"
+    num_processes: int = 0
+    num_machines: int = 1
+    machine_rank: int = 0
+    main_process_port: int = 29500
+
+
+@dataclass(frozen=True)
 class SpatialText2SQLFinetuneConfig:
     data: FinetuneDataConfig = field(default_factory=FinetuneDataConfig)
     model: FinetuneModelConfig = field(default_factory=FinetuneModelConfig)
     training: FinetuneTrainingConfig = field(default_factory=FinetuneTrainingConfig)
     logging: FinetuneLoggingConfig = field(default_factory=FinetuneLoggingConfig)
+    runtime: FinetuneRuntimeConfig = field(default_factory=FinetuneRuntimeConfig)
 
 
 def _as_text(value: Any, default: str = "") -> str:
@@ -137,6 +148,29 @@ def _as_float(value: Any, default: float) -> float:
     return float(value)
 
 
+def _as_non_negative_int_list(value: Any, default: list[int]) -> list[int]:
+    if value in (None, ""):
+        return list(default)
+    if isinstance(value, str):
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        parsed = [int(part) for part in parts]
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        parsed = [int(item) for item in value]
+    else:
+        parsed = [int(value)]
+    for item in parsed:
+        if item < 0:
+            raise ValueError(f"Expected non-negative GPU indices, got {value!r}")
+    return parsed
+
+
+def _as_runtime_backend(value: Any, default: str) -> str:
+    backend = _as_text(value, default).strip().lower()
+    if backend not in {"none", "accelerate"}:
+        raise ValueError(f"Unsupported distributed backend: {value!r}")
+    return backend
+
+
 def load_trl_finetune_config(config_path: str | Path | None = None) -> SpatialText2SQLFinetuneConfig:
     path = Path(config_path or DEFAULT_TRL_FINETUNE_CONFIG_PATH)
     if not path.is_file():
@@ -156,11 +190,13 @@ def _build_trl_finetune_config_from_payload(
     model_section = payload.get("model") or {}
     training_section = payload.get("training") or {}
     logging_section = payload.get("logging") or {}
+    runtime_section = payload.get("runtime") or {}
     for section_name, section in (
         ("data", data_section),
         ("model", model_section),
         ("training", training_section),
         ("logging", logging_section),
+        ("runtime", runtime_section),
     ):
         if section and not isinstance(section, Mapping):
             raise ValueError(f"Invalid TRL fine-tune config: '{section_name}' must be a mapping.")
@@ -169,19 +205,15 @@ def _build_trl_finetune_config_from_payload(
     default_model = FinetuneModelConfig()
     default_training = FinetuneTrainingConfig()
     default_logging = FinetuneLoggingConfig()
+    default_runtime = FinetuneRuntimeConfig()
 
     return SpatialText2SQLFinetuneConfig(
         data=FinetuneDataConfig(
             input_path=_resolve_path(data_section.get("input_path"), path, default_data.input_path),
-            prepared_output_path=_resolve_path(
-                data_section.get("prepared_output_path"),
+            alpaca_output_path=_resolve_path(
+                data_section.get("alpaca_output_path"),
                 path,
-                default_data.prepared_output_path,
-            ),
-            prompt_template_path=_resolve_path(
-                data_section.get("prompt_template_path"),
-                path,
-                default_data.prompt_template_path,
+                default_data.alpaca_output_path,
             ),
             task_description=_as_text(data_section.get("task_description"), default_data.task_description),
             eval_ratio=_as_float(data_section.get("eval_ratio"), default_data.eval_ratio),
@@ -249,12 +281,45 @@ def _build_trl_finetune_config_from_payload(
                 training_section.get("resume_from_checkpoint"),
                 default_training.resume_from_checkpoint,
             ),
+            deepspeed_config_path=_resolve_path(
+                training_section.get("deepspeed_config_path"),
+                path,
+                default_training.deepspeed_config_path,
+            )
+            if to_text(training_section.get("deepspeed_config_path"))
+            else default_training.deepspeed_config_path,
         ),
         logging=FinetuneLoggingConfig(
             log_level=_as_text(logging_section.get("log_level"), default_logging.log_level),
             log_path=_resolve_path(logging_section.get("log_path"), path, default_logging.log_path)
             if to_text(logging_section.get("log_path"))
             else default_logging.log_path,
+        ),
+        runtime=FinetuneRuntimeConfig(
+            nvidia_gpu_indices=_as_non_negative_int_list(
+                runtime_section.get("nvidia_gpu_indices"),
+                default_runtime.nvidia_gpu_indices,
+            ),
+            distributed_backend=_as_runtime_backend(
+                runtime_section.get("distributed_backend"),
+                default_runtime.distributed_backend,
+            ),
+            num_processes=_as_non_negative_int(
+                runtime_section.get("num_processes"),
+                default_runtime.num_processes,
+            ),
+            num_machines=_as_positive_int(
+                runtime_section.get("num_machines"),
+                default_runtime.num_machines,
+            ),
+            machine_rank=_as_non_negative_int(
+                runtime_section.get("machine_rank"),
+                default_runtime.machine_rank,
+            ),
+            main_process_port=_as_positive_int(
+                runtime_section.get("main_process_port"),
+                default_runtime.main_process_port,
+            ),
         ),
     )
 
@@ -266,12 +331,14 @@ def override_trl_finetune_config(
     model: Mapping[str, Any] | None = None,
     training: Mapping[str, Any] | None = None,
     logging: Mapping[str, Any] | None = None,
+    runtime: Mapping[str, Any] | None = None,
 ) -> SpatialText2SQLFinetuneConfig:
     merged = {
         "data": {**base.data.__dict__, **dict(data or {})},
         "model": {**base.model.__dict__, **dict(model or {})},
         "training": {**base.training.__dict__, **dict(training or {})},
         "logging": {**base.logging.__dict__, **dict(logging or {})},
+        "runtime": {**base.runtime.__dict__, **dict(runtime or {})},
     }
     return _build_trl_finetune_config_from_payload(
         stable_jsonify(merged),

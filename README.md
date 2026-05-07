@@ -330,7 +330,13 @@ scripts/finetune/train.sh \
   --model-name-or-path Qwen/Qwen2.5-7B-Instruct \
   --output-dir outputs/finetune/qwen25_7b_full
 
-# Reuse an already prepared training file
+# Use all eight A100 GPUs (default)
+scripts/finetune/train.sh --nvidia-gpu-indices 0,1,2,3,4,5,6,7
+
+# Restrict training to two NVIDIA GPUs by physical index
+scripts/finetune/train.sh --nvidia-gpu-indices 0,1
+
+# Reuse an already formatted Alpaca training file
 scripts/finetune/train.sh --train-only
 ```
 
@@ -338,18 +344,25 @@ Default settings:
 
 - Config file: `config/finetune.yaml`
 - Input NL2SQL file: `data/processed/nl2sql.jsonl`
-- Prepared training file: `data/processed/finetune/spatial_text2sql_trl_train.jsonl`
+- Alpaca training file: `data/processed/finetune/nl2sql_alpaca.jsonl`
 - Shell entrypoint: `scripts/finetune/train.sh`
 - Python CLI: `src/finetune/cli.py`
-- Prompt template: `prompts/train_prompt.txt`
+- Prompt instruction layout is built directly in `src/finetune/prompting.py`
 - Default base model: `Qwen/Qwen2.5-Coder-7B-Instruct`
+- Default multi-GPU visibility: all eight GPUs `0-7`
+- Distributed launcher: `accelerate`
+- GPU selection: `runtime.nvidia_gpu_indices` in `config/finetune.yaml` or `--nvidia-gpu-indices 0,1,...`
+- Optional DeepSpeed config: `training.deepspeed_config_path`
 
 Training data behavior:
 
 - The fine-tuning loader reads `question`, `sql`, `database_id`, `question_id`, `source_difficulty_level`, `used_tables`, `used_columns`, `used_spatial_functions`, and `sql_features` directly from `nl2sql.jsonl`.
 - Fine-tuning only uses the embedded `metadata.database_context` carried by each `nl2sql` row.
 - If embedded metadata is missing, prompt assembly keeps the sample and leaves schema / representative-value sections empty; it does not connect back to PostgreSQL/PostGIS.
-- Prepared samples are rendered as prompt/completion pairs where the completion is the final SQL only, without custom reasoning tags.
+- The formatter first writes Alpaca rows with `instruction`, `input`, and `output`, and TRL training reads that Alpaca file directly.
+- When `runtime.nvidia_gpu_indices` is set, the fine-tune CLI exports `CUDA_VISIBLE_DEVICES` and `NVIDIA_VISIBLE_DEVICES` before importing the trainer stack.
+- When more than one visible GPU is configured and `runtime.distributed_backend=accelerate`, the CLI prepares the dataset once on the parent process and then relaunches training with `accelerate launch`.
+- If `training.deepspeed_config_path` is provided, the Hugging Face trainer passes that DeepSpeed config through to TRL/HF training under the same `accelerate` launch flow.
 
 Edit persistent settings in `config/finetune.yaml`.
 

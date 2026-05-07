@@ -235,6 +235,7 @@ class DiversityAwareQuestionSynthesizer:
             question=candidate.question,
             sql=sql_query.sql,
             reasoning_summary=candidate.reasoning_summary,
+            sql_reasoning_summary=sql_query.reasoning_summary,
             spatial_phrases=list(candidate.spatial_phrases),
             source_difficulty_level=sql_query.difficulty_level,
             used_tables=list(sql_query.used_tables or features.tables),

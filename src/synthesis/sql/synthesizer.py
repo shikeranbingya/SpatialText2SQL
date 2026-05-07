@@ -631,6 +631,7 @@ class ConstraintGuidedSQLSynthesizer:
             city=database.city,
             difficulty_level=difficulty_level,
             sql=candidate.sql,
+            reasoning_summary=candidate.reasoning_summary,
             used_tables=candidate.used_tables or validation_result.detected_tables,
             used_columns=candidate.used_columns or validation_result.detected_columns,
             used_spatial_functions=candidate.used_spatial_functions or validation_result.detected_spatial_functions,

@@ -60,6 +60,7 @@ class SQLQuestionSource:
     city: str
     difficulty_level: str
     sql: str
+    reasoning_summary: str = ""
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
     used_spatial_functions: list[str] = field(default_factory=list)
@@ -91,6 +92,7 @@ class SQLQuestionSource:
             city=city,
             difficulty_level=difficulty_level,
             sql=sql,
+            reasoning_summary=to_text(payload.get("reasoning_summary")),
             used_tables=_as_text_list(payload.get("used_tables")),
             used_columns=_as_text_list(payload.get("used_columns")),
             used_spatial_functions=_as_text_list(payload.get("used_spatial_functions")),
@@ -341,6 +343,7 @@ class SynthesizedQuestion:
     question: str
     sql: str
     reasoning_summary: str = ""
+    sql_reasoning_summary: str = ""
     spatial_phrases: list[str] = field(default_factory=list)
     source_difficulty_level: str = ""
     used_tables: list[str] = field(default_factory=list)
@@ -363,6 +366,7 @@ class SynthesizedQuestion:
             "question": self.question,
             "sql": self.sql,
             "reasoning_summary": self.reasoning_summary,
+            "sql_reasoning_summary": self.sql_reasoning_summary,
             "spatial_phrases": list(self.spatial_phrases),
             "source_difficulty_level": self.source_difficulty_level,
             "used_tables": list(self.used_tables),

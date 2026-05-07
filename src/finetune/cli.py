@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,20 +14,18 @@ from .config import (
     load_trl_finetune_config,
     override_trl_finetune_config,
 )
-from .dataset import SpatialText2SQLDatasetBuilder
+from .formatter import NL2SQLAlpacaFormatter
 from .io import (
-    load_prepared_finetune_samples,
     load_raw_finetune_samples,
-    write_prepared_finetune_samples,
+    write_raw_finetune_samples,
 )
-from .trainer import TRLFullFinetuner
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare and run TRL full fine-tuning for spatial Text-to-SQL.")
     parser.add_argument("--config", default=str(DEFAULT_TRL_FINETUNE_CONFIG_PATH))
     parser.add_argument("--input")
-    parser.add_argument("--prepared-output")
+    parser.add_argument("--alpaca-output")
     parser.add_argument("--model-name-or-path")
     parser.add_argument("--tokenizer-name-or-path")
     parser.add_argument("--output-dir")
@@ -34,7 +34,105 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train-only", action="store_true")
     parser.add_argument("--log-level")
     parser.add_argument("--log-path")
+    parser.add_argument("--nvidia-gpu-indices")
+    parser.add_argument("--distributed-backend", choices=["none", "accelerate"])
+    parser.add_argument("--num-processes", type=int)
+    parser.add_argument("--main-process-port", type=int)
+    parser.add_argument("--deepspeed-config-path")
+    parser.add_argument("--launched-by-accelerate", action="store_true", help=argparse.SUPPRESS)
     return parser
+
+
+def _apply_runtime_environment(config) -> None:
+    gpu_indices = list(config.runtime.nvidia_gpu_indices or [])
+    if not gpu_indices:
+        return
+    gpu_value = ",".join(str(index) for index in gpu_indices)
+    os.environ["CUDA_VISIBLE_DEVICES"] = gpu_value
+    os.environ["NVIDIA_VISIBLE_DEVICES"] = gpu_value
+
+
+def _effective_num_processes(config) -> int:
+    configured = int(config.runtime.num_processes)
+    if configured > 0:
+        return configured
+    gpu_indices = list(config.runtime.nvidia_gpu_indices or [])
+    return max(len(gpu_indices), 1)
+
+
+def _should_launch_with_accelerate(config, args) -> bool:
+    if args.prepare_only or args.launched_by_accelerate:
+        return False
+    if os.environ.get("LOCAL_RANK") is not None:
+        return False
+    if os.environ.get("WORLD_SIZE") not in (None, "", "1"):
+        return False
+    if str(config.runtime.distributed_backend).strip().lower() != "accelerate":
+        return False
+    return _effective_num_processes(config) > 1
+
+
+def _build_accelerate_command(config, args) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "accelerate.commands.launch",
+        "--num_processes",
+        str(_effective_num_processes(config)),
+        "--num_machines",
+        str(config.runtime.num_machines),
+        "--machine_rank",
+        str(config.runtime.machine_rank),
+        "--main_process_port",
+        str(config.runtime.main_process_port),
+        "-m",
+        "src.finetune.cli",
+        "--config",
+        str(args.config),
+        "--train-only",
+        "--model-name-or-path",
+        config.model.model_name_or_path,
+        "--output-dir",
+        config.training.output_dir,
+        "--eval-ratio",
+        str(config.data.eval_ratio),
+        "--distributed-backend",
+        "accelerate",
+        "--num-processes",
+        str(_effective_num_processes(config)),
+        "--main-process-port",
+        str(config.runtime.main_process_port),
+        "--launched-by-accelerate",
+    ]
+    if config.model.tokenizer_name_or_path:
+        command.extend(["--tokenizer-name-or-path", config.model.tokenizer_name_or_path])
+    if config.logging.log_level:
+        command.extend(["--log-level", config.logging.log_level])
+    if config.logging.log_path:
+        command.extend(["--log-path", config.logging.log_path])
+    if config.runtime.nvidia_gpu_indices:
+        command.extend(
+            ["--nvidia-gpu-indices", ",".join(str(index) for index in config.runtime.nvidia_gpu_indices)]
+        )
+    if config.training.deepspeed_config_path:
+        command.extend(["--deepspeed-config-path", config.training.deepspeed_config_path])
+    return command
+
+
+def _prepare_rows(config) -> list:
+    raw_rows = load_raw_finetune_samples(config.data.input_path)
+    logging.info("Loaded raw fine-tune samples | count=%s", len(raw_rows))
+    formatter = NL2SQLAlpacaFormatter(
+        data_config=config.data,
+    )
+    alpaca_rows = formatter.format_samples(raw_rows)
+    write_raw_finetune_samples(config.data.alpaca_output_path, alpaca_rows)
+    logging.info(
+        "Formatted Alpaca fine-tune samples written | count=%s | output=%s",
+        len(alpaca_rows),
+        config.data.alpaca_output_path,
+    )
+    return alpaca_rows
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,7 +146,7 @@ def main(argv: list[str] | None = None) -> int:
         config,
         data={key: value for key, value in {
             "input_path": args.input,
-            "prepared_output_path": args.prepared_output,
+            "alpaca_output_path": args.alpaca_output,
             "eval_ratio": args.eval_ratio,
         }.items() if value is not None},
         model={key: value for key, value in {
@@ -57,12 +155,20 @@ def main(argv: list[str] | None = None) -> int:
         }.items() if value is not None},
         training={key: value for key, value in {
             "output_dir": args.output_dir,
+            "deepspeed_config_path": args.deepspeed_config_path,
         }.items() if value is not None},
         logging={key: value for key, value in {
             "log_level": args.log_level,
             "log_path": args.log_path,
         }.items() if value is not None},
+        runtime={key: value for key, value in {
+            "nvidia_gpu_indices": args.nvidia_gpu_indices,
+            "distributed_backend": args.distributed_backend,
+            "num_processes": args.num_processes,
+            "main_process_port": args.main_process_port,
+        }.items() if value is not None},
     )
+    _apply_runtime_environment(config)
 
     log_handlers = None
     if config.logging.log_path:
@@ -74,33 +180,37 @@ def main(argv: list[str] | None = None) -> int:
         handlers=log_handlers,
     )
     logging.info(
-        "TRL fine-tune config loaded | input=%s | prepared_output=%s | model=%s | output_dir=%s",
+        "TRL fine-tune config loaded | input=%s | alpaca_output=%s | model=%s | output_dir=%s | distributed_backend=%s | nvidia_gpu_indices=%s | num_processes=%s",
         config.data.input_path,
-        config.data.prepared_output_path,
+        config.data.alpaca_output_path,
         config.model.model_name_or_path,
         config.training.output_dir,
+        config.runtime.distributed_backend,
+        config.runtime.nvidia_gpu_indices,
+        _effective_num_processes(config),
     )
 
+    if _should_launch_with_accelerate(config, args):
+        if not args.train_only:
+            _prepare_rows(config)
+            if args.prepare_only:
+                return 0
+        command = _build_accelerate_command(config, args)
+        logging.info("Launching distributed fine-tuning via accelerate | command=%s", command)
+        completed = subprocess.run(command, env=os.environ.copy(), check=False)
+        return int(completed.returncode)
+
     if args.train_only:
-        prepared_rows = load_prepared_finetune_samples(config.data.prepared_output_path)
+        alpaca_rows = load_raw_finetune_samples(config.data.alpaca_output_path)
     else:
-        raw_rows = load_raw_finetune_samples(config.data.input_path)
-        logging.info("Loaded raw fine-tune samples | count=%s", len(raw_rows))
-        builder = SpatialText2SQLDatasetBuilder(
-            data_config=config.data,
-        )
-        prepared_rows = builder.prepare_samples(raw_rows)
-        write_prepared_finetune_samples(config.data.prepared_output_path, prepared_rows)
-        logging.info(
-            "Prepared fine-tune samples written | count=%s | output=%s",
-            len(prepared_rows),
-            config.data.prepared_output_path,
-        )
+        alpaca_rows = _prepare_rows(config)
         if args.prepare_only:
             return 0
 
+    from .trainer import TRLFullFinetuner
+
     finetuner = TRLFullFinetuner(config)
-    metrics = finetuner.train(prepared_rows)
+    metrics = finetuner.train(alpaca_rows)
     logging.info("TRL fine-tuning completed | metrics=%s", metrics)
     return 0
 

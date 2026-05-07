@@ -22,7 +22,6 @@ class SpatialText2SQLDatasetBuilder:
     ) -> None:
         self.data_config = data_config
         self.prompt_renderer = prompt_renderer or FinetunePromptRenderer(
-            template_path=self.data_config.prompt_template_path,
             task_description=self.data_config.task_description,
             max_representative_rows=self.data_config.max_representative_rows,
         )
@@ -32,19 +31,23 @@ class SpatialText2SQLDatasetBuilder:
         next_question_id = self.data_config.question_id_start
         for row in rows:
             metadata = self._load_metadata(row)
-            schema_lines, spatial_lines, representative_values = FinetunePromptRenderer.build_runtime_prompt_context(
+            schema_lines, representative_values = FinetunePromptRenderer.build_runtime_prompt_context(
                 metadata,
                 included_tables=row.used_tables,
                 max_representative_rows=self.data_config.max_representative_rows,
             )
-            prompt = self.prompt_renderer.render_prompt(
+            instruction = row.instruction or self.prompt_renderer.render_instruction()
+            input_text = row.input_text or self.prompt_renderer.render_input(
                 question=row.question,
                 schema_lines=schema_lines,
-                spatial_lines=spatial_lines,
                 representative_values=representative_values,
             )
-            cot = self._build_synthetic_cot(row)
-            completion = self.prompt_renderer.render_completion(cot, row.sql)
+            output_text = row.output_text or self.prompt_renderer.render_output(
+                row.sql_reasoning_summary,
+                row.sql,
+            )
+            prompt = self.prompt_renderer.compose_prompt(instruction, input_text)
+            completion = output_text
             prepared_rows.append(
                 PreparedFinetuneSample(
                     question_id=next_question_id,
@@ -54,9 +57,12 @@ class SpatialText2SQLDatasetBuilder:
                     difficulty=row.difficulty,
                     prompt=prompt,
                     completion=completion,
-                    cot=cot,
+                    instruction=instruction,
+                    input_text=input_text,
+                    output_text=output_text,
+                    cot=row.sql_reasoning_summary,
+                    sql_reasoning_summary=row.sql_reasoning_summary,
                     schema=list(schema_lines),
-                    spatial_field_metadata=list(spatial_lines),
                     representative_values=stable_jsonify(representative_values),
                     used_tables=list(row.used_tables),
                     used_columns=list(row.used_columns),
@@ -89,56 +95,3 @@ class SpatialText2SQLDatasetBuilder:
         if isinstance(metadata.get("tables"), Sequence) and not isinstance(metadata.get("tables"), (str, bytes)):
             return {str(key): stable_jsonify(value) for key, value in metadata.items()}
         return None
-
-    def _build_synthetic_cot(self, row: RawFinetuneSample) -> str:
-        steps: list[str] = []
-        tables = ", ".join(row.used_tables) if row.used_tables else "the relevant schema tables"
-        steps.append(f"Identify {tables} as the tables needed for this {row.difficulty} spatial question.")
-
-        if row.used_spatial_functions:
-            function_text = ", ".join(row.used_spatial_functions)
-            steps.append(f"Use {function_text} to express the required spatial relation, distance check, or geometry operation.")
-        else:
-            steps.append("Match the question against the available spatial columns and preserve the required spatial semantics.")
-
-        feature_constraints = self._summarize_sql_features(row.sql_features)
-        if feature_constraints:
-            steps.append(feature_constraints)
-
-        steps.append("Return one executable PostgreSQL/PostGIS SQL query that answers the question exactly.")
-        return "\n".join(f"{index + 1}. {step}" for index, step in enumerate(steps))
-
-    @staticmethod
-    def _summarize_sql_features(sql_features: Mapping[str, Any]) -> str:
-        if not sql_features:
-            return "Keep the SQL filters, ranking, and output columns aligned with the question wording."
-        parts: list[str] = []
-        aggregates = [to_text(item) for item in sql_features.get("aggregates", []) if to_text(item)]
-        if aggregates:
-            parts.append(f"preserve the aggregation logic ({', '.join(aggregates)})")
-        group_by_columns = [to_text(item) for item in sql_features.get("group_by_columns", []) if to_text(item)]
-        if group_by_columns:
-            parts.append(f"group by {', '.join(group_by_columns)} when needed")
-        order_by = sql_features.get("order_by", [])
-        if isinstance(order_by, list) and order_by:
-            order_parts = []
-            for item in order_by:
-                if not isinstance(item, Mapping):
-                    continue
-                column_name = to_text(item.get("column") or item.get("expression"))
-                direction = to_text(item.get("direction")).upper() or "ASC"
-                if column_name:
-                    order_parts.append(f"{column_name} {direction}")
-            if order_parts:
-                parts.append(f"respect the ranking/order ({', '.join(order_parts)})")
-        limit = sql_features.get("limit")
-        if limit not in (None, ""):
-            parts.append(f"keep the top-k/limit constraint at {limit}")
-        if sql_features.get("has_cte") or sql_features.get("has_subquery"):
-            parts.append("preserve the nested query structure where it is required")
-        filters = [to_text(item) for item in sql_features.get("filters", []) if to_text(item)]
-        if filters:
-            parts.append("keep the SQL filters aligned with the question entities and constraints")
-        if not parts:
-            return "Keep the SQL filters, ranking, and output columns aligned with the question wording."
-        return "Preserve the query structure: " + "; ".join(parts) + "."

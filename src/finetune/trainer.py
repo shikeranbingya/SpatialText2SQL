@@ -14,7 +14,8 @@ import transformers
 import trl
 
 from .config import SpatialText2SQLFinetuneConfig
-from .models import PreparedFinetuneSample
+from .models import RawFinetuneSample
+from .prompting import FinetunePromptRenderer
 
 LOGGER = logging.getLogger(__name__)
 
@@ -23,17 +24,17 @@ class TRLFullFinetuner:
     def __init__(self, config: SpatialText2SQLFinetuneConfig) -> None:
         self.config = config
 
-    def train(self, rows: Sequence[PreparedFinetuneSample]) -> dict[str, Any]:
+    def train(self, rows: Sequence[RawFinetuneSample]) -> dict[str, Any]:
         if not rows:
-            raise ValueError("No prepared fine-tune rows were provided.")
+            raise ValueError("No Alpaca fine-tune rows were provided.")
 
         train_rows, eval_rows = self._split_rows(rows)
         train_dataset = datasets.Dataset.from_list(
-            [{"prompt": row.prompt, "completion": row.completion} for row in train_rows]
+            [{"prompt": self._prompt_from_row(row), "completion": self._completion_from_row(row)} for row in train_rows]
         )
         eval_dataset = (
             datasets.Dataset.from_list(
-                [{"prompt": row.prompt, "completion": row.completion} for row in eval_rows]
+                [{"prompt": self._prompt_from_row(row), "completion": self._completion_from_row(row)} for row in eval_rows]
             )
             if eval_rows
             else None
@@ -125,8 +126,8 @@ class TRLFullFinetuner:
 
     def _split_rows(
         self,
-        rows: Sequence[PreparedFinetuneSample],
-    ) -> tuple[list[PreparedFinetuneSample], list[PreparedFinetuneSample]]:
+        rows: Sequence[RawFinetuneSample],
+    ) -> tuple[list[RawFinetuneSample], list[RawFinetuneSample]]:
         if len(rows) < 2 or self.config.data.eval_ratio <= 0:
             return list(rows), []
         rng = np.random.default_rng(self.config.data.shuffle_seed)
@@ -134,14 +135,22 @@ class TRLFullFinetuner:
         eval_count = max(1, int(round(len(rows) * self.config.data.eval_ratio)))
         eval_count = min(eval_count, len(rows) - 1)
         eval_indices = set(indices[:eval_count])
-        train_rows: list[PreparedFinetuneSample] = []
-        eval_rows: list[PreparedFinetuneSample] = []
+        train_rows: list[RawFinetuneSample] = []
+        eval_rows: list[RawFinetuneSample] = []
         for index, row in enumerate(rows):
             if index in eval_indices:
                 eval_rows.append(row)
             else:
                 train_rows.append(row)
         return train_rows, eval_rows
+
+    @staticmethod
+    def _prompt_from_row(row: RawFinetuneSample) -> str:
+        return FinetunePromptRenderer.compose_prompt(row.instruction, row.input_text)
+
+    @staticmethod
+    def _completion_from_row(row: RawFinetuneSample) -> str:
+        return row.output_text
 
     def _build_sft_config(self, sft_config_cls, *, has_eval: bool):
         signature = inspect.signature(sft_config_cls.__init__)
@@ -182,6 +191,8 @@ class TRLFullFinetuner:
         maybe_set("report_to", report_value)
         maybe_set("seed", self.config.training.seed)
         maybe_set("remove_unused_columns", False)
+        if self.config.training.deepspeed_config_path:
+            maybe_set("deepspeed", self.config.training.deepspeed_config_path)
 
         strategy_key = "eval_strategy" if "eval_strategy" in signature.parameters else "evaluation_strategy"
         if has_eval:

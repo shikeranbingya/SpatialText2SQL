@@ -420,6 +420,7 @@ class QualityControlTests(unittest.TestCase):
                 "question": "Which parks are within 100 units of neighborhoods?",
                 "sql": "SELECT p.name FROM parks p JOIN neighborhoods n ON ST_DWithin(p.geom, n.geom, 100)",
                 "reasoning_summary": "Use the spatial join and return the park names.",
+                "sql_reasoning_summary": "Use ST_DWithin to relate parks and neighborhoods within 100 units.",
                 "spatial_phrases": ["within 100 units of"],
                 "source_difficulty_level": "medium",
                 "used_tables": ["parks", "neighborhoods"],
@@ -442,6 +443,7 @@ class QualityControlTests(unittest.TestCase):
             self.assertEqual(row["prompt"], payload["prompt"])
             self.assertEqual(row["generation_metadata"], payload["generation_metadata"])
             self.assertEqual(row["sql_features"], payload["sql_features"])
+            self.assertEqual(row["sql_reasoning_summary"], payload["sql_reasoning_summary"])
             self.assertEqual(row["metadata"]["quality_control"]["passed"], True)
 
 

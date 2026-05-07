@@ -1026,6 +1026,7 @@ class SQLSynthesisTests(unittest.TestCase):
         self.assertIn("operator does not exist", rows[0].minor_revision_prompts[0])
         self.assertIn("table_1_sample", rows[0].minor_revision_prompts[0])
         self.assertIn("1000", rows[0].sql)
+        self.assertEqual(rows[0].reasoning_summary, "minor fix")
         self.assertTrue(rows[0].execution_result["success"])
         self.assertEqual(len(generator.prompts), 2)
 

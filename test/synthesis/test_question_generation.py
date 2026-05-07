@@ -76,6 +76,7 @@ def _make_sql_source(sql: str) -> SQLQuestionSource:
             "city": "nyc",
             "difficulty_level": "medium",
             "sql": sql,
+            "reasoning_summary": "Join parks to neighborhoods with the distance filter preserved.",
             "used_tables": ["parks", "neighborhoods"],
             "used_columns": ["name", "geom"],
             "used_spatial_functions": ["ST_DWithin"],
@@ -435,6 +436,10 @@ class QuestionGenerationTests(unittest.TestCase):
         self.assertEqual(len(written), 1)
         self.assertEqual(written[0]["sql_id"], "sql_001")
         self.assertEqual(written[0]["question_id"], "nyc_0001_0001")
+        self.assertEqual(
+            written[0]["sql_reasoning_summary"],
+            "Join parks to neighborhoods with the distance filter preserved.",
+        )
         self.assertEqual(offsets, {"nyc_0001": 1})
 
     def test_write_synthesized_questions_overwrites_existing_file(self):

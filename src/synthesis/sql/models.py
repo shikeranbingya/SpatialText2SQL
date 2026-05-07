@@ -149,6 +149,7 @@ class SynthesizedSQLQuery:
     city: str
     difficulty_level: str
     sql: str
+    reasoning_summary: str = ""
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
     used_spatial_functions: list[str] = field(default_factory=list)
@@ -170,6 +171,7 @@ class SynthesizedSQLQuery:
             "city": self.city,
             "difficulty_level": self.difficulty_level,
             "sql": self.sql,
+            "reasoning_summary": self.reasoning_summary,
             "used_tables": list(self.used_tables),
             "used_columns": list(self.used_columns),
             "used_spatial_functions": list(self.used_spatial_functions),

@@ -1,8 +1,7 @@
 data:
   input_path: data/processed/nl2sql.jsonl
-  prepared_output_path: data/processed/finetune/spatial_text2sql_trl_train.jsonl
-  prompt_template_path: prompts/train_prompt.txt
-  task_description: Translate the spatial question into one executable PostgreSQL/PostGIS SQL query using the provided schema, spatial metadata, and representative values.
+  alpaca_output_path: data/processed/finetune/nl2sql_alpaca.jsonl
+  task_description: Translate the spatial question into one executable PostgreSQL/PostGIS SQL query using the provided schema and representative values.
   eval_ratio: 0.02
   question_id_start: 0
   max_representative_rows: 3
@@ -41,7 +40,16 @@ training:
   report_to: none
   seed: 42
   resume_from_checkpoint: ""
+  deepspeed_config_path: ""
 
 logging:
   log_level: INFO
   log_path: ""
+
+runtime:
+  nvidia_gpu_indices: [0, 1, 2, 3, 4, 5, 6, 7]
+  distributed_backend: accelerate
+  num_processes: 0
+  num_machines: 1
+  machine_rank: 0
+  main_process_port: 29500

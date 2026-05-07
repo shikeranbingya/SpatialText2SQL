@@ -15,6 +15,7 @@ if [[ $# -ge 1 && ( "${1}" == "--help" || "${1}" == "-h" ) ]]; then
 Usage: $(basename "$0") [extra python args...]
 
 Default config: ${DEFAULT_CONFIG}
+The script first formats nl2sql.jsonl into an Alpaca-style JSONL, then trains directly from that Alpaca file.
 
 Optional environment overrides:
   FINETUNE_CONFIG
@@ -23,6 +24,8 @@ Optional environment overrides:
 Examples:
   $(basename "$0")
   $(basename "$0") --prepare-only
+  $(basename "$0") --alpaca-output data/processed/finetune/custom_nl2sql_alpaca.jsonl
+  $(basename "$0") --nvidia-gpu-indices 0,1,2,3,4,5,6,7
   $(basename "$0") --model-name-or-path Qwen/Qwen2.5-7B-Instruct --output-dir outputs/finetune/qwen25_7b_full
 EOF
   exit 0

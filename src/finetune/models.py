@@ -50,6 +50,10 @@ class RawFinetuneSample:
     difficulty: str
     question_id: str = ""
     city: str = ""
+    instruction: str = ""
+    input_text: str = ""
+    output_text: str = ""
+    sql_reasoning_summary: str = ""
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
     used_spatial_functions: list[str] = field(default_factory=list)
@@ -81,12 +85,35 @@ class RawFinetuneSample:
             sql=sql,
             question=question,
             difficulty=difficulty,
+            instruction=to_text(payload.get("instruction")),
+            input_text=to_text(payload.get("input")),
+            output_text=to_text(payload.get("output")),
+            sql_reasoning_summary=to_text(payload.get("sql_reasoning_summary")),
             used_tables=_as_text_list(payload.get("used_tables")),
             used_columns=_as_text_list(payload.get("used_columns")),
             used_spatial_functions=_as_text_list(payload.get("used_spatial_functions")),
             sql_features=_as_mapping(payload.get("sql_features")),
             metadata=_as_mapping(payload.get("metadata")),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "question_id": self.question_id,
+            "database_id": self.database_id,
+            "city": self.city,
+            "question": self.question,
+            "sql": self.sql,
+            "difficulty": self.difficulty,
+            "instruction": self.instruction,
+            "input": self.input_text,
+            "output": self.output_text,
+            "sql_reasoning_summary": self.sql_reasoning_summary,
+            "used_tables": list(self.used_tables),
+            "used_columns": list(self.used_columns),
+            "used_spatial_functions": list(self.used_spatial_functions),
+            "sql_features": stable_jsonify(self.sql_features),
+            "metadata": stable_jsonify(self.metadata),
+        }
 
 
 @dataclass(frozen=True)
@@ -98,9 +125,12 @@ class PreparedFinetuneSample:
     difficulty: str
     prompt: str
     completion: str
-    cot: str
+    instruction: str = ""
+    input_text: str = ""
+    output_text: str = ""
+    cot: str = ""
+    sql_reasoning_summary: str = ""
     schema: list[str] = field(default_factory=list)
-    spatial_field_metadata: list[str] = field(default_factory=list)
     representative_values: dict[str, Any] = field(default_factory=dict)
     used_tables: list[str] = field(default_factory=list)
     used_columns: list[str] = field(default_factory=list)
@@ -119,9 +149,12 @@ class PreparedFinetuneSample:
             difficulty=to_text(payload.get("difficulty")),
             prompt=to_text(payload.get("prompt")),
             completion=to_text(payload.get("completion")),
+            instruction=to_text(payload.get("instruction")),
+            input_text=to_text(payload.get("input")),
+            output_text=to_text(payload.get("output")),
             cot=to_text(payload.get("cot")),
+            sql_reasoning_summary=to_text(payload.get("sql_reasoning_summary")),
             schema=_as_text_list(payload.get("schema")),
-            spatial_field_metadata=_as_text_list(payload.get("spatial_field_metadata")),
             representative_values=_as_mapping(payload.get("representative_values")),
             used_tables=_as_text_list(payload.get("used_tables")),
             used_columns=_as_text_list(payload.get("used_columns")),
@@ -137,9 +170,12 @@ class PreparedFinetuneSample:
             "difficulty": self.difficulty,
             "prompt": self.prompt,
             "completion": self.completion,
+            "instruction": self.instruction,
+            "input": self.input_text,
+            "output": self.output_text,
             "cot": self.cot,
+            "sql_reasoning_summary": self.sql_reasoning_summary,
             "schema": list(self.schema),
-            "spatial_field_metadata": list(self.spatial_field_metadata),
             "representative_values": stable_jsonify(self.representative_values),
             "used_tables": list(self.used_tables),
             "used_columns": list(self.used_columns),

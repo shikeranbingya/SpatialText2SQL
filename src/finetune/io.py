@@ -29,6 +29,15 @@ def load_raw_finetune_samples(input_path: str) -> list[RawFinetuneSample]:
     return rows
 
 
+def write_raw_finetune_samples(output_path: str, rows: list[RawFinetuneSample]) -> None:
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row.to_dict(), ensure_ascii=False))
+            handle.write("\n")
+
+
 def load_prepared_finetune_samples(input_path: str) -> list[PreparedFinetuneSample]:
     path = Path(input_path)
     if not path.is_file():
